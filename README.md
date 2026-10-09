@@ -14,13 +14,23 @@ BlinkScroll is a Chrome/Edge/Brave extension that watches your blinks through yo
 
 Because every human blinks differently, BlinkScroll doesn't ship with fixed timings — it **interviews you** on first run (60 seconds) and learns *your* natural blink, *your* deliberate blink, *your* double-blink gap, and *your* comfortable long-close. It keeps adapting quietly as you use it, and it refuses to fire when it can't see you clearly (dark room, face out of frame) instead of guessing wrong.
 
-## Install (2 minutes)
+## Install
 
-1. Clone the repo or download it as a ZIP (`Code` → `Download ZIP` on GitHub), then unzip.
-2. Open `chrome://extensions`, enable **Developer mode** (top right).
-3. Click **Load unpacked** and select the unzipped folder.
-4. The calibration interview opens automatically — follow it (camera permission required).
-5. Open Instagram Reels, TikTok, or YouTube Shorts. Blink.
+**Option A — automatic (easiest):**
+```bash
+python3 setup/auto_setup.py
+```
+Detects your default browser (Brave / Chrome / Edge / Chromium — falls back to your most-used one) and loads the extension into it. If the browser is already running, close it first and re-run (Chromium ignores `--load-extension` on a running instance).
+
+**Option B — manual (1 minute):** watch `setup/manual-setup-guide.mp4` — or follow along here:
+1. Unzip the download. Inside is an `extension/` folder.
+2. Open your browser and go to `chrome://extensions`.
+3. Switch on **Developer mode** (top right).
+4. Click **Load unpacked**, select the `extension/` folder. Done.
+5. The calibration interview opens automatically — give it 60 seconds
+   (or watch `setup/interview-walkthrough.mp4` first to see how it works).
+
+Then open Instagram Reels, TikTok, or YouTube Shorts. Blink.
 
 No build step, no server, no account.
 
@@ -36,15 +46,23 @@ No build step, no server, no account.
 
 ```
 blinkscroll/
-├── manifest.json          # MV3 manifest
-├── background.js          # service worker: routes feed <-> camera worker
-├── offscreen.js/.html     # webcam + MediaPipe + gesture engine
-├── content.js             # feed detection + scroll/pause execution
-├── popup.html/.js         # toggle, live status, re-calibrate
-├── interview.html/.js     # first-run calibration interview
-├── src/engine.js          # pure gesture state machine (no DOM/chrome APIs)
-├── test/engine.test.mjs   # synthetic-EAR unit tests (11 cases)
-└── vendor/                # MediaPipe model + WASM (all local)
+├── README.md                  # you are here
+├── LICENSE
+├── extension/                 # ← load THIS folder unpacked in chrome://extensions
+│   ├── manifest.json
+│   ├── background.js          # service worker: routes feed <-> camera worker
+│   ├── offscreen.js/.html     # webcam + MediaPipe + gesture engine
+│   ├── content.js             # feed detection + scroll/pause execution
+│   ├── popup.html/.js         # toggle, live status, re-calibrate
+│   ├── interview.html/.js     # first-run calibration interview
+│   ├── src/engine.js          # pure gesture state machine (no DOM/chrome APIs)
+│   └── vendor/                # MediaPipe model + WASM (all local, works offline)
+└── setup/
+    ├── auto_setup.py          # detects your browser, loads the extension
+    ├── manual-setup-guide.mp4 # narrated 1-minute install walkthrough
+    └── interview-walkthrough.mp4  # animated guide to the calibration interview
+└── test/
+    └── engine.test.mjs        # synthetic-EAR unit tests (11 cases)
 ```
 
 ## Development
