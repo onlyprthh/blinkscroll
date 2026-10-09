@@ -52,7 +52,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'GESTURE': {
         // From the offscreen document: a blink gesture was detected.
         const target = pickTargetTab();
-        if (target) chrome.tabs.sendMessage(target, { type: 'DO_GESTURE', gesture: msg.gesture });
+        if (target) {
+          // The tab may not have our content script (e.g. wrong page) —
+          // never let that reject unhandled.
+          chrome.tabs.sendMessage(target, { type: 'DO_GESTURE', gesture: msg.gesture })
+            .catch(() => {});
+        }
         break;
       }
       case 'GET_STATE': {
