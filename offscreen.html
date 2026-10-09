@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>BlinkScroll camera worker</title></head>
+<body>
+  <!-- The offscreen document owns the webcam. It is never visible;
+       Chrome shows the OS camera indicator while it runs. -->
+  <video id="cam" autoplay muted playsinline width="640" height="480"></video>
+  <script type="module" src="offscreen.js"></script>
+</body>
+</html>

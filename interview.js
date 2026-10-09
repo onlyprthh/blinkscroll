@@ -1,0 +1,269 @@
+// interview.js — first-run calibration interview.
+// Measures the user's OWN blink timings per gesture, with Back/Redo on every
+// step and nothing saved until the final Save. Runs its own camera + MediaPipe
+// right here in the tab (simpler than routing through the offscreen worker).
+import { FaceLandmarker, FilesetResolver } from './vendor/vision_bundle.mjs';
+import {
+  BlinkSampler, earFromLandmarks, median, profileFromInterview, DEFAULT_PROFILE,
+} from './src/engine.js';
+
+const $ = id => document.getElementById(id);
+const video = $('cam'), ring = $('ring');
+
+const M = { earOpen: [], natural: [], single: [], gaps: [], long: [] };
+let sampler = new BlinkSampler(0.2);
+let landmarker = null, lastVideoTime = -1;
+let stepIndex = 0, stepStart = 0, hintAt = 0;
+let count = 0;                 // completed samples this step
+let pendingFirstReopen = 0;    // double-blink pairing
+let done = false;
+
+const STEPS = [
+  { id: 'face',   label: 'Face check' },
+  { id: 'single', label: 'Single blink → next' },
+  { id: 'double', label: 'Double blink → previous' },
+  { id: 'long',   label: 'Long close → pause' },
+  { id: 'review', label: 'Review & save' },
+];
+
+function dots() {
+  $('dots').innerHTML = STEPS.map((s, i) =>
+    `<span class="${i < stepIndex ? 'done' : i === stepIndex ? 'now' : ''}"></span>`).join('');
+}
+
+function setBtns(html) { $('btns').innerHTML = html; }
+function btnBack() { return `<button class="ghost" id="bBack">← Back</button>`; }
+function btnRedo() { return `<button class="ghost" id="bRedo">↻ Redo step</button>`; }
+function wireCommon() {
+  $('bBack').onclick = () => { if (stepIndex > 0) { stepIndex--; enterStep(); } };
+  const r = $('bRedo');
+  if (r) r.onclick = () => { clearStepSamples(); enterStep(); };
+}
+function clearStepSamples() {
+  const id = STEPS[stepIndex].id;
+  if (id === 'single') M.single = [];
+  if (id === 'double') { M.gaps = []; pendingFirstReopen = 0; }
+  if (id === 'long') M.long = [];
+  count = 0; hintAt = 0;
+}
+
+function showHint(text) {
+  if (!hintAt) hintAt = performance.now();
+  if (performance.now() - hintAt > 15000) {
+    $('status').innerHTML = `<span class="warn">${text}</span>`;
+    hintAt = performance.now(); // re-arm so it doesn't spam, just persists
+  }
+}
+
+// --- step screens -----------------------------------------------------------
+function enterStep() {
+  if (done) return;
+  dots();
+  count = 0; hintAt = 0; stepStart = performance.now();
+  pendingFirstReopen = 0;
+  $('bar').style.width = '0%';
+  const id = STEPS[stepIndex].id;
+
+  if (id === 'face') {
+    $('title').textContent = 'First, let me see you';
+    $('lede').textContent = 'Position your face inside the frame. Nothing is recorded or uploaded — the camera never leaves this page.';
+    $('instr').innerHTML = 'Just <b>look at the screen naturally</b> for a few seconds, blinking like you normally would.';
+    $('status').textContent = 'measuring your natural blink…';
+    setBtns(''); $('skip').style.display = '';
+  } else if (id === 'single') {
+    $('title').textContent = 'Your "next reel" blink';
+    $('lede').textContent = 'Everyone blinks differently — I\'m learning yours.';
+    $('instr').innerHTML = '<b>Blink 5 times</b> — a clear, deliberate blink, the way you\'d flip to the next reel.';
+    $('status').innerHTML = `detected <b>0 / 5</b>`;
+    setBtns(btnBack() + btnRedo());
+    wireCommon(); $('skip').style.display = 'none';
+  } else if (id === 'double') {
+    $('title').textContent = 'Your "previous reel" double-blink';
+    $('lede').textContent = 'Two quick blinks, one right after the other.';
+    $('instr').innerHTML = '<b>Double-blink 3 times.</b> Don\'t rush it — do it the way that feels natural to you.';
+    $('status').innerHTML = `pairs detected <b>0 / 3</b>`;
+    setBtns(btnBack() + btnRedo());
+    wireCommon();
+  } else if (id === 'long') {
+    $('title').textContent = 'Your pause / resume hold';
+    $('lede').textContent = 'This one needs to be clearly longer than a blink, so it never fires by accident.';
+    $('instr').innerHTML = '<b>Close your eyes and keep them shut</b> for a moment, then open. Do it <b>twice</b>.';
+    $('status').innerHTML = `holds detected <b>0 / 2</b>`;
+    setBtns(btnBack() + btnRedo());
+    wireCommon();
+  } else if (id === 'review') {
+    showReview();
+  }
+}
+
+function showReview() {
+  const preview = profileFromInterview({
+    earOpenMedian: median(M.earOpen) || 0.28,
+    naturalMs: median(M.natural) || 130,
+    singleMs: M.single, doubleGaps: M.gaps, longMs: M.long,
+  });
+  $('title').textContent = 'Here\'s what I learned';
+  $('lede').textContent = 'Your personal timings. If anything looks off, go back and redo that step.';
+  $('stage').style.display = 'none';
+  $('instr').innerHTML = '';
+  $('status').innerHTML = '';
+  $('bar').style.width = '100%';
+  $('skip').style.display = 'none';
+  document.querySelector('.review')?.remove();
+  const div = document.createElement('div');
+  div.className = 'review';
+  div.innerHTML =
+    `Your natural blink: <b>~${Math.round(median(M.natural) || 130)}ms</b> — anything this quick is ignored<br>` +
+    `Your "next" blink: <b>~${Math.round(median(M.single))}ms</b> → next reel<br>` +
+    `Your double-blink gap: <b>~${Math.round(median(M.gaps))}ms</b> → previous reel<br>` +
+    `Your long close: <b>~${(median(M.long) / 1000).toFixed(1)}s</b> → pause / resume`;
+  $('btns').before(div);
+  setBtns(btnBack() + `<button class="primary" id="bSave">Save & finish ✓</button>`);
+  $('bBack').onclick = () => { stepIndex--; $('stage').style.display = ''; div.remove(); enterStep(); };
+  $('bSave').onclick = save;
+}
+
+async function save(useDefaults = false) {
+  const prev = (await chrome.storage.local.get('profile')).profile || null;
+  const profile = useDefaults
+    ? { ...DEFAULT_PROFILE, calibratedAt: 0 }
+    : profileFromInterview({
+        earOpenMedian: median(M.earOpen) || 0.28,
+        naturalMs: median(M.natural) || 130,
+        singleMs: M.single, doubleGaps: M.gaps, longMs: M.long,
+      });
+  // Previous profile is kept as a fallback; the old one stays live if the
+  // user closes this tab without saving (nothing is written until now).
+  await chrome.storage.local.set({ profile, prevProfile: prev });
+  done = true;
+  document.querySelector('.card').innerHTML = `
+    <div class="done-icon">👁️✓</div>
+    <h1 style="text-align:center">You're calibrated</h1>
+    <p class="lede" style="text-align:center">
+      ${useDefaults ? 'Using defaults — you can calibrate properly anytime from the popup.'
+                    : 'BlinkScroll learned your eyes.'}<br><br>
+      Open <b>Instagram Reels</b>, <b>TikTok</b>, or <b>YouTube Shorts</b> and blink.<br>
+      <span style="color:#6b6b76">single blink → next · double blink → previous · long close → pause</span>
+    </p>
+    <div class="btns"><button class="primary" onclick="window.close()">Close this tab</button></div>`;
+}
+
+// --- detection loop ---------------------------------------------------------
+async function init() {
+  try {
+    const fileset = await FilesetResolver.forVisionTasks(chrome.runtime.getURL('vendor/wasm'));
+    landmarker = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: {
+        modelAssetPath: chrome.runtime.getURL('vendor/face_landmarker.task'),
+        delegate: 'CPU',
+      },
+      runningMode: 'VIDEO',
+      numFaces: 1,
+    });
+  } catch (e) {
+    $('instr').innerHTML = `<span class="warn">Couldn't load the face model: ${e.message}</span>`;
+    return;
+  }
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' }, audio: false,
+    });
+    video.srcObject = s;
+    await video.play();
+  } catch {
+    $('instr').innerHTML =
+      'Camera access was denied. BlinkScroll needs your webcam to see your blinks — ' +
+      'everything is processed on this page and nothing is uploaded.<br><br>' +
+      'Allow the camera and reload this tab to try again.';
+    return;
+  }
+  enterStep();
+  requestAnimationFrame(loop);
+}
+
+function loop() {
+  requestAnimationFrame(loop);
+  if (done || !landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const now = performance.now();
+  const res = landmarker.detectForVideo(video, now);
+  const face = res.faceLandmarks && res.faceLandmarks[0];
+  ring.classList.toggle('ok', !!face);
+  if (!face) return;
+
+  const ear = earFromLandmarks(face);
+  if (ear == null) return;
+  const id = STEPS[stepIndex].id;
+
+  if (id === 'face') {
+    if (M.earOpen.length < 300) M.earOpen.push(ear);
+    for (const b of sampler.feed(ear, now)) {
+      if (b.durationMs > 60 && b.durationMs < 400) M.natural.push(b.durationMs);
+    }
+    const el = (now - stepStart) / 1000;
+    $('bar').style.width = Math.min(100, (el / 5) * 100) + '%';
+    if (el >= 5 && M.natural.length >= 2) {
+      const earMed = median(M.earOpen);
+      sampler.setThreshold(Math.min(0.3, Math.max(0.12, earMed * 0.72)));
+      stepIndex++; enterStep();
+    } else if (el > 20) { // couldn't get clean samples; continue with defaults
+      stepIndex++; enterStep();
+    }
+    return;
+  }
+
+  if (id === 'review') return;
+
+  for (const b of sampler.feed(ear, now)) {
+    const d = b.durationMs;
+    if (id === 'single') {
+      if (d >= 120 && d <= 1200) {
+        M.single.push(d); count++;
+        $('status').innerHTML = `detected <b>${count} / 5</b> <span class="good">✓</span>`;
+        $('bar').style.width = (count / 5) * 100 + '%';
+        if (count >= 5) { stepIndex++; enterStep(); return; }
+      } else if (d < 120) {
+        showHint('That was very quick — give me a clear, deliberate blink.');
+      }
+    } else if (id === 'double') {
+      if (d >= 120 && d <= 800) {
+        if (pendingFirstReopen && b.atMs - pendingFirstReopen < 900) {
+          M.gaps.push(b.atMs - pendingFirstReopen);
+          pendingFirstReopen = 0; count++;
+          $('status').innerHTML = `pairs detected <b>${count} / 3</b> <span class="good">✓</span>`;
+          $('bar').style.width = (count / 3) * 100 + '%';
+          if (count >= 3) { stepIndex++; enterStep(); return; }
+        } else {
+          pendingFirstReopen = b.atMs;
+          $('status').innerHTML = `first blink seen — <b>now the second, quick!</b>`;
+        }
+      }
+    } else if (id === 'long') {
+      if (d >= 800) {
+        M.long.push(d); count++;
+        $('status').innerHTML = `holds detected <b>${count} / 2</b> <span class="good">✓ ${(d / 1000).toFixed(1)}s</span>`;
+        $('bar').style.width = (count / 2) * 100 + '%';
+        if (count >= 2) { stepIndex++; enterStep(); return; }
+      } else {
+        $('status').innerHTML = `<span class="warn">that was ${(d / 1000).toFixed(1)}s — keep them shut a little longer</span>`;
+      }
+    }
+  }
+
+  // expire stale first-blink while waiting for the double's second half
+  if (pendingFirstReopen && now - pendingFirstReopen > 1500) {
+    pendingFirstReopen = 0;
+    $('status').innerHTML = `pairs detected <b>${count} / 3</b> — too slow, try the two blinks closer together`;
+  }
+
+  // live hold progress for the long-close step
+  if (id === 'long' && sampler.isClosed()) {
+    $('bar').style.width = Math.min(100, (sampler.currentCloseDuration(now) / 2000) * 100) + '%';
+  }
+
+  if (id !== 'face') showHint('I\'m not catching it — try a slightly firmer, clearer blink.');
+}
+
+$('skip').onclick = () => save(true);
+
+init();
