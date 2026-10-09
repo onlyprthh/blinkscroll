@@ -5,8 +5,10 @@ Detects your default browser (falling back to your most-used Chromium
 browser) and loads the BlinkScroll extension into it.
 
 Usage:
-    python3 auto_setup.py            # detect + launch
-    python3 auto_setup.py --dry-run  # only report what would happen
+    python3 auto_setup.py                # detect + launch (this session)
+    python3 auto_setup.py --permanent    # patch your launcher: loads on EVERY start
+    python3 auto_setup.py --undo         # remove the permanent patch
+    python3 auto_setup.py --dry-run      # only report what would happen
 
 How it works:
   1. Detect the default browser (OS-specific). If that fails, pick the
@@ -216,8 +218,115 @@ def is_running(key: str) -> bool:
         return False
 
 
+# --- permanent setup: patch the browser launcher ---------------------------
+# A fully silent permanent install is impossible by design (Chromium treats
+# it as malware behavior). The sanctioned permanent route is the Chrome Web
+# Store. Until then, this patches your launcher so EVERY browser start loads
+# the extension — one script run, permanent effect, trivially reversible.
+
+def set_permanent(key: str, enable: bool) -> bool:
+    if SYSTEM == "Linux":
+        return set_permanent_linux(key, enable)
+    if SYSTEM == "Windows":
+        return set_permanent_windows(key, enable)
+    print("macOS: patching the app launcher would break its code signature,")
+    print("so automatic permanent setup isn't offered there.")
+    print("Manual alternative: add the extension once via")
+    print("setup/manual-setup-guide.mp4 — it stays installed.")
+    return False
+
+
+def set_permanent_linux(key: str, enable: bool) -> bool:
+    import re
+    desktop_name = BROWSERS[key]["desktop"]
+    src = None
+    for d in ("/usr/share/applications",
+              os.path.expanduser("~/.local/share/applications")):
+        cand = os.path.join(d, desktop_name)
+        if os.path.exists(cand):
+            src = cand
+            break
+    if not src:
+        print(f"Could not find {desktop_name} — is {BROWSERS[key]['label']} "
+              f"installed via the system package manager / official repo?")
+        return False
+    dst_dir = os.path.expanduser("~/.local/share/applications")
+    os.makedirs(dst_dir, exist_ok=True)
+    dst = os.path.join(dst_dir, desktop_name)
+    with open(src) as f:
+        content = f.read()
+    # strip any previous flag first (idempotent)
+    content = re.sub(r"\s*--load-extension=\S+", "", content)
+    if enable:
+        flag = f"--load-extension={EXT_DIR}"
+        # insert right after the binary, before %U/%F field codes
+        content, n = re.subn(r"^(Exec=\S+)(.*)$", r"\1 " + flag + r"\2",
+                             content, flags=re.M)
+        if n == 0:
+            print("Could not parse the Exec line in the launcher file.")
+            return False
+    with open(dst, "w") as f:
+        f.write(content)
+    try:  # best effort; harmless if the tool is missing
+        subprocess.run(["update-desktop-database", dst_dir],
+                       capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    action = "installed permanently into" if enable else "removed from"
+    print(f"Launcher patched: {dst}")
+    print(f"BlinkScroll {action} your {BROWSERS[key]['label']} launcher" +
+          (" — it will load on every start." if enable
+           else " — back to a stock launcher."))
+    return True
+
+
+def set_permanent_windows(key: str, enable: bool) -> bool:
+    # Rewrites the Arguments of every Brave/Chrome/Edge shortcut on the
+    # Desktop and Start Menu via PowerShell (WScript.Shell COM).
+    exe = os.path.basename(find_binary(key) or "")
+    if not exe:
+        return False
+    flag = f"--load-extension={EXT_DIR}"
+    ps = r"""
+$flag = $args[0]; $exe = $args[1]; $enable = $args[2] -eq '1'
+$dirs = @("$env:USERPROFILE\Desktop",
+          "$env:APPDATA\Microsoft\Windows\Start Menu\Programs")
+$fixed = 0
+foreach ($dir in $dirs) {
+  if (-not (Test-Path $dir)) { continue }
+  Get-ChildItem $dir -Filter *.lnk -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+    $sh = New-Object -ComObject WScript.Shell
+    $lnk = $sh.CreateShortcut($_.FullName)
+    if ($lnk.TargetPath -like "*$exe") {
+      $a = $lnk.Arguments -replace '\s*--load-extension=\S+', ''
+      if ($enable) { $a = ($a + ' ' + $flag).Trim() }
+      $lnk.Arguments = $a; $lnk.Save(); $fixed++
+    }
+  }
+}
+Write-Output "patched $fixed shortcut(s)"
+"""
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps, "--", flag, exe,
+         "1" if enable else "0"],
+        capture_output=True, text=True, timeout=60)
+    print(r.stdout.strip() or r.stderr.strip()[-300:])
+    ok = r.returncode == 0
+    if ok:
+        action = "installed permanently into" if enable else "removed from"
+        suffix = (" — it will load on every start." if enable
+                  else " — back to stock shortcuts.")
+        print(f"BlinkScroll {action} your {BROWSERS[key]['label']} shortcuts{suffix}")
+    else:
+        print("Windows permanent setup is UNVERIFIED on a real machine — "
+              "if it failed, use the manual guide.")
+    return ok
+
+
 def main() -> int:
     dry = "--dry-run" in sys.argv
+    permanent = "--permanent" in sys.argv
+    undo = "--undo" in sys.argv
     print("BlinkScroll automatic setup")
     print("===========================")
 
@@ -251,6 +360,17 @@ def main() -> int:
     print(f"Browser : {BROWSERS[key]['label']} ({how})")
     print(f"Binary  : {binary}")
     print(f"Extension: {EXT_DIR}")
+
+    if permanent or undo:
+        # Patch the launcher so the extension loads on EVERY start.
+        # No need to close the browser — this takes effect next launch.
+        ok = set_permanent(key, enable=permanent)
+        if ok and permanent:
+            print()
+            print("Note: on first launch Brave may show a small “developer mode")
+            print("extensions” notice — just dismiss it. (That notice disappears")
+            print("entirely once BlinkScroll is published to the Web Store.)")
+        return 0 if ok else 1
 
     if is_running(key):
         print()

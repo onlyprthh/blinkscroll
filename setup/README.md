@@ -16,7 +16,18 @@ python3 auto_setup.py
   (Chromium ignores `--load-extension` on a running instance).
 
 > Note: a command-line-loaded extension stays active for that browser session.
-> For a permanent install, use the manual steps below (one minute, once).
+> For a permanent install, use the manual steps below (one minute, once) —
+> or run the permanent patch:
+
+```bash
+python3 auto_setup.py --permanent   # patch your launcher: loads on EVERY start
+python3 auto_setup.py --undo        # remove the patch, back to stock
+```
+
+This edits your Brave/Chrome/Edge launcher (Linux) or shortcuts (Windows)
+so the browser always starts with `--load-extension`. Fully reversible with
+`--undo`. (A completely silent install isn't possible — Chromium blocks it as
+malware behavior. The true permanent route is the Chrome Web Store.)
 
 ## 2. Manual setup — video guide
 
