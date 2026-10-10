@@ -106,6 +106,15 @@ function findFeedScroller() {
 }
 
 function scrollFeed(dir) {
+  const host = location.hostname || '';
+  if (host.endsWith('tiktok.com')) {
+    // TikTok drives its feed through its own key/wheel handlers with animated
+    // transitions; programmatic scroll() on its container is ignored (verified
+    // against the live DOM 2026-10-11). Arrow keys are its documented feed
+    // navigation ("use the ↑ ↓ keys ... to browse your feed"), so use those.
+    pressArrow(dir > 0 ? 'ArrowDown' : 'ArrowUp');
+    return;
+  }
   const scroller = findFeedScroller();
   if (scroller) {
     const distance = Math.max(scroller.clientHeight, window.innerHeight);

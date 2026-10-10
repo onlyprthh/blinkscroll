@@ -9,7 +9,7 @@ function run(command, args) {
   return result.status ?? 1;
 }
 
-let exitCode = run(process.execPath, ['--test', 'test/engine.test.mjs', 'test/site-routing.test.mjs', 'test/camera-lifecycle.test.mjs']);
+let exitCode = run(process.execPath, ['--test', 'test/engine.test.mjs', 'test/site-routing.test.mjs', 'test/camera-lifecycle.test.mjs', 'test/content-scroll.test.mjs']);
 if (exitCode !== 0) process.exit(exitCode);
 
 const pythonCandidates = process.platform === 'win32' ? ['python', 'py'] : ['python3', 'python'];
