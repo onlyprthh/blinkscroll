@@ -22,6 +22,20 @@ test('TikTok supported feed routes are recognized on both host variants', () => 
   assert.equal(routing.isFeedUrl('https://www.tiktok.com/@creator/video/123'), true);
 });
 
+test('TikTok locale-prefixed feed routes are recognized', () => {
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/en/'), true);
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/en'), true);
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/en-US/'), true);
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/en/foryou'), true);
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/en/@creator/video/123'), true);
+});
+
+test('TikTok locale-prefixed non-feed pages do not arm the camera', () => {
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/en/discover'), false);
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/en/upload'), false);
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/following'), false);
+});
+
 test('YouTube Shorts routes are recognized on both host variants', () => {
   assert.equal(routing.isFeedUrl('https://www.youtube.com/shorts/abc'), true);
   assert.equal(routing.isFeedUrl('https://youtube.com/shorts'), true);

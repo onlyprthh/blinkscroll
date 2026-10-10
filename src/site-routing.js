@@ -53,7 +53,10 @@
     if (site === 'instagram') return /^\/reels?(?:\/|$)/.test(path);
     if (site === 'facebook') return /^\/reels?(?:\/|$)/.test(path);
     if (site === 'tiktok') {
-      return path === '/' || path.startsWith('/foryou') || /^\/@[^/]+\/video\//.test(path);
+      // TikTok serves the For You feed under a locale prefix (/en/, /en-US/).
+      // Strip it so the feed rules work in every locale.
+      const p = path.replace(/^\/[a-z]{2}(?:-[A-Za-z]{2})?(?=\/|$)/, '') || '/';
+      return p === '/' || p.startsWith('/foryou') || /^\/@[^/]+\/video\//.test(p);
     }
     if (site === 'youtube') return path === '/shorts' || path.startsWith('/shorts/');
     return false;
