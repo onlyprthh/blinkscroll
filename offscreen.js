@@ -60,7 +60,7 @@ function init() {
         void startCamera(requestedGeneration).catch(err => {
           if (requestedGeneration === cameraGeneration && activeTabId !== null && enabled) {
             cameraError = err?.name || 'CameraError';
-            console.warn('[BlinkScroll] camera start failed:', err);
+            console.warn('[BlinkScroll] camera start failed:', err?.name, err?.message);
           }
         });
         sendResponse({ ok: true });

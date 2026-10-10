@@ -14,6 +14,23 @@ let lastSyncedTabId; // undefined = not synced yet; null = no active feed
 let lastSyncedEnabled;
 let syncQueue = Promise.resolve();
 
+// Camera errors that must never auto-retry: re-prompting for a denied,
+// missing, or misconfigured camera is hostile, so those stay wedged until the
+// user hits retry / Fix camera access in the popup. Anything else is treated
+// as transient (a briefly busy device, an interrupted start) and gets a
+// throttled re-attempt instead of wedging the camera off forever.
+const NO_RETRY_CAMERA_ERRORS = new Set([
+  'NotAllowedError',
+  'NotFoundError',
+  'OverconstrainedError',
+  'SecurityError',
+  'NotSupportedError',
+  'DetectorError',
+  'TypeError',
+]);
+const CAMERA_RETRY_COOLDOWN_MS = 15000;
+let lastCameraRetryAt = 0;
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
@@ -195,9 +212,18 @@ async function syncActiveFeed(force = false) {
     if (status?.activeTabId === targetId && (status.cameraOn || status.cameraStarting)) {
       return targetId;
     }
-    // Don't repeatedly prompt for a denied/missing camera. The popup exposes a
-    // deliberate retry / permission-recovery action for those cases.
-    if (status?.activeTabId === targetId && status.cameraError) return targetId;
+    // Don't repeatedly prompt for a denied/missing/misconfigured camera. The
+    // popup exposes a deliberate retry / permission-recovery action for those
+    // cases. Transient failures get one throttled re-attempt: without this, a
+    // single momentary failure (e.g. the device was briefly busy) wedged the
+    // camera off forever — every later sync early-returned on the cached
+    // cameraError and never tried again.
+    if (status?.activeTabId === targetId && status.cameraError) {
+      if (NO_RETRY_CAMERA_ERRORS.has(status.cameraError)) return targetId;
+      const now = Date.now();
+      if (now - lastCameraRetryAt < CAMERA_RETRY_COOLDOWN_MS) return targetId;
+      lastCameraRetryAt = now;
+    }
   }
 
   if (targetId !== null && isEnabled) {
