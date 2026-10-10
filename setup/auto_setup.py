@@ -323,6 +323,16 @@ Write-Output "patched $fixed shortcut(s)"
     return ok
 
 
+def pause():
+    # On Windows the script is usually double-clicked: without this, the
+    # console vanishes the instant the script ends and nobody reads anything.
+    if SYSTEM == "Windows" and "--no-pause" not in sys.argv:
+        try:
+            input("\nPress Enter to close this window...")
+        except EOFError:
+            pass
+
+
 def main() -> int:
     dry = "--dry-run" in sys.argv
     permanent = "--permanent" in sys.argv
@@ -373,12 +383,35 @@ def main() -> int:
         return 0 if ok else 1
 
     if is_running(key):
+        label = BROWSERS[key]['label']
         print()
-        print(f"{BROWSERS[key]['label']} is currently running.")
-        print("Chromium ignores --load-extension on a running instance, so:")
-        print(f"  1. Close {BROWSERS[key]['label']} completely, then")
-        print("  2. Re-run:  python3 auto_setup.py")
-        return 2
+        print(f"{label} is currently running.")
+        print("Chromium ignores --load-extension on a running instance,")
+        print("so launching now would silently do nothing.")
+        if SYSTEM == "Windows" and not dry:
+            import time
+            ans = input(f"Close {label} now and relaunch it with "
+                        f"BlinkScroll loaded? [y/N]: ").strip().lower()
+            if ans == "y":
+                proc = [p for p in BROWSERS[key]["procs"] if p.endswith(".exe")]
+                proc = proc[0] if proc else BROWSERS[key]["procs"][0]
+                print(f"Closing {label}...")
+                subprocess.run(["taskkill", "/F", "/IM", proc],
+                               capture_output=True, timeout=30)
+                time.sleep(2)
+                # fall through to launch below
+            else:
+                print("OK — no changes made.")
+                print("Tip: `python3 auto_setup.py --permanent` patches your")
+                print("shortcuts instead, so it just works on your next launch")
+                print("without closing anything now.")
+                return 2
+        else:
+            print(f"  1. Close {label} completely, then")
+            print("  2. Re-run:  python3 auto_setup.py")
+            print("Tip: `python3 auto_setup.py --permanent` avoids this — it")
+            print("takes effect on your next launch, no closing needed.")
+            return 2
 
     cmd = [binary, f"--load-extension={EXT_DIR}"]
     if dry:
@@ -397,4 +430,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        code = main()
+    finally:
+        pause()
+    sys.exit(code)
