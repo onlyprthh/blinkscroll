@@ -37,7 +37,7 @@ No build step, no server, no account.
 ## How it works
 
 - **Face/eye tracking:** [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) runs entirely in your browser via WebAssembly. Eye Aspect Ratio (EAR) per frame → open/closed state → a small state machine classifies single / double / long-close.
-- **Camera plumbing:** a Manifest V3 *offscreen document* owns `getUserMedia` and the detection loop. The camera turns on only while a reels/shorts tab is active — the OS camera light is your indicator.
+- **Camera plumbing:** a Manifest V3 *offscreen document* owns `getUserMedia` and the detection loop. Camera eligibility comes directly from the currently selected tab URL (not a delayed content-script heartbeat), and the worker verifies the camera actually started before considering its state synchronized. The camera turns on only while BlinkScroll is enabled and a supported reels/shorts tab is selected. The toolbar popup is a dashboard only; opening or closing it does not stop capture. The OS camera light is your indicator.
 - **Scrolling:** the extension fires `ArrowDown`/`ArrowUp` key events (all three players navigate feeds with arrow keys — no brittle DOM selectors), and clicks the video element for pause/resume.
 - **Adaptive thresholds:** your involuntary-blink baseline is tracked with a slow-moving average; the "deliberate blink" floor always sits clearly above it, so watering eyes never hijack your feed. The closed-eye EAR threshold drifts slowly with lighting.
 - **Privacy:** 100% on-device. Frames never leave the offscreen document, let alone your machine. There is no analytics, no network call, no server. The model + WASM runtime are vendored in `vendor/` so it even works offline.
@@ -55,27 +55,36 @@ blinkscroll/                   # <- load THIS folder unpacked in chrome://extens
 +-- popup.html/.js             # toggle, live status, re-calibrate
 +-- interview.html/.js         # first-run calibration interview
 +-- src/engine.js              # pure gesture state machine (no DOM/chrome APIs)
++-- src/sandbox-client.js      # postMessage bridge to the sandboxed detector
++-- scripts/                   # repeatable project checks and test runner
++-- package.json               # dependency-free test commands
 +-- vendor/                    # MediaPipe model + WASM (all local, works offline)
 +-- setup/
 |   +-- auto_setup.py          # detects your browser, loads the extension
 |   +-- manual-setup-guide.mp4 # narrated 1-minute install walkthrough
 |   +-- interview-walkthrough.mp4  # animated guide to the calibration interview
 +-- test/
-    +-- engine.test.mjs        # synthetic-EAR unit tests (11 cases)
+    +-- engine.test.mjs        # synthetic-EAR gesture regression tests
+    +-- site-routing.test.mjs   # host/path detection regression tests
+    +-- test_auto_setup.py     # installer regression tests
 ```
 
-## Development
+## Development and regression checks
+
+Requires Node.js 18+ and Python 3; no `npm install` or network access is required because MediaPipe and its WASM/model assets are vendored.
 
 ```bash
-npm install                  # pulls @mediapipe/tasks-vision (to refresh vendor/)
-node test/engine.test.mjs    # gesture state machine tests — must stay green
+npm test       # gesture-engine tests + installer regression tests
+npm run check  # manifest/resource reference and JS/Python syntax checks
 ```
 
-The gesture logic in `src/engine.js` is deliberately DOM-free so it can be unit-tested with synthetic eye-aspect-ratio streams: natural blinks never fire, doubles never double-fire as singles, cooldowns swallow machine-gunning, low confidence suspends everything.
+The gesture logic in `src/engine.js` is DOM-free and tested with synthetic eye-aspect-ratio streams. Regression coverage includes single/double arbitration, long-close cooldowns, low-confidence suspension, malformed profiles, apex/www URL routing, installer idempotence, and preserving other extensions' launcher flags.
 
 ## Status
 
-v0.1.0 — working prototype. The gesture engine is unit-tested; live camera + per-site behavior still needs real-world verification (that's you — please open issues with your experience, lighting conditions, and whether you wear glasses).
+v0.2.4 — popup-independent camera lifecycle. Camera eligibility now depends on the Enabled setting and selected supported tab URL, never on extension popup focus. Dismissing the toolbar popup no longer tears down the camera.
+
+v0.2.3 — active-tab/camera lifecycle hardening. The selected tab URL is now the source of truth for camera eligibility; failed or lost offscreen starts are reconciled from live status; stale asynchronous camera requests are invalidated when tabs change; and the popup exposes the active URL, camera errors, and a retry action. Automated routing, gesture-engine, installer, and project checks pass. A real webcam and live Instagram/TikTok/YouTube layout verification is still needed before calling every site fully verified.
 
 ## Roadmap ideas
 

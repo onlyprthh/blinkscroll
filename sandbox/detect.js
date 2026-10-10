@@ -4,7 +4,7 @@
 // Pure geometry (EAR) is computed here; gesture classification stays with the
 // parent (BlinkEngine / BlinkSampler are plain JS and need no WASM).
 import { FaceLandmarker, FilesetResolver } from '../vendor/vision_bundle.mjs';
-import { earFromLandmarks } from '../src/engine.js';
+import { earFromLandmarks, isPlausibleEAR } from '../src/engine.js';
 
 let landmarker = null;
 
@@ -32,7 +32,16 @@ async function init() {
 
 onmessage = async (e) => {
   const m = e.data;
-  if (!m || m.type !== 'bs-frame' || !landmarker) return;
+  if (e.source !== parent || !m || m.type !== 'bs-frame') return;
+  if (!landmarker) {
+    try { m.bitmap?.close(); } catch { /* no-op */ }
+    return;
+  }
+  if (!Number.isInteger(m.id) || !Number.isFinite(m.ts) || !m.bitmap) {
+    try { m.bitmap?.close(); } catch { /* no-op */ }
+    if (Number.isInteger(m.id)) parent.postMessage({ type: 'bs-result', id: m.id, ear: null, hasFace: false }, '*');
+    return;
+  }
   let ear = null;
   let hasFace = false;
   try {
@@ -40,9 +49,9 @@ onmessage = async (e) => {
     const face = res.faceLandmarks && res.faceLandmarks[0];
     if (face) {
       ear = earFromLandmarks(face);
-      // Sanity gate: garbage geometry counts as "can't see", never as a blink.
-      // This is what keeps dark rooms from misfiring.
-      hasFace = ear != null && ear > 0.03 && ear < 0.55;
+      // Invalid geometry is treated as lost tracking, but near-zero EAR is a
+      // valid closed-eye frame and must survive to the long-close classifier.
+      hasFace = ear != null && isPlausibleEAR(ear);
       if (!hasFace) ear = null;
     }
   } catch {

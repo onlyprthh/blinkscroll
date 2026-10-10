@@ -1,51 +1,96 @@
 // popup.js — tiny status + controls. No camera here.
 const $ = id => document.getElementById(id);
 
-async function refresh() {
-  const state = await chrome.runtime.sendMessage({ type: 'GET_STATE' });
-  $('enabled').checked = state.enabled;
-  $('feedState').textContent = state.feedActive ? 'detected ✓' : 'not on a feed';
-  $('calibLine').textContent = !state.hasProfile
-    ? 'not calibrated yet — run the interview'
-    : state.calibratedAt
-      ? 'calibrated ' + new Date(state.calibratedAt).toLocaleDateString()
-      : 'using default timings — calibrate for best results';
+let refreshing = false;
 
-  // Ask the offscreen worker for live camera/face status (may not exist yet).
+async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
   try {
-    const s = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
+    const state = await chrome.runtime.sendMessage({ type: 'GET_STATE' });
+    if (!state || state.ok === false) throw new Error(state?.error || 'Extension state unavailable');
+    $('enabled').checked = state.enabled !== false;
+    $('feedState').textContent = state.feedActive ? 'detected ✓' : 'not on a feed';
+    $('activeTabLine').textContent = state.activeUrl
+      ? `Active tab: ${state.activeUrl}`
+      : 'Active tab URL unavailable';
+    $('calibLine').textContent = !state.hasProfile
+      ? 'not calibrated yet — run the interview'
+      : state.calibratedAt
+        ? 'calibrated ' + new Date(state.calibratedAt).toLocaleDateString()
+        : 'using default timings — calibrate for best results';
+
+    let status = null;
+    try {
+      status = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
+      if (!status || status.ok !== true) status = null;
+    } catch { status = null; }
+
     const camErrText = {
-      NotReadableError: 'busy — close other camera tabs',
-      NotAllowedError: 'blocked — allow camera for this site',
+      NotReadableError: 'busy — close other camera apps',
+      NotAllowedError: 'permission blocked — use Fix camera access',
       NotFoundError: 'no camera found',
-    }[s.cameraError] || (s.cameraError ? 'error' : '');
-    $('camDot').className = 'dot' + (s.cameraOn ? ' on' : (s.cameraError ? ' warn' : ''));
-    $('camState').textContent = s.cameraOn ? 'on' : (camErrText || 'off');
-    $('camState').title = s.cameraError ? `Camera error: ${s.cameraError}` : '';
-    // NotAllowedError = the extension's camera permission was denied or never
-    // granted (e.g. after reinstalling under a new extension id). The fix is
-    // to grant it in a visible tab — the interview requests it on load.
-    const needGrant = !s.cameraOn && s.cameraError === 'NotAllowedError';
-    $('fixCam').style.display = needGrant ? '' : 'none';
-    const faceOk = s.cameraOn && !s.engine.suspended;
-    $('faceDot').className = 'dot' + (s.cameraOn ? (faceOk ? ' on' : ' warn') : '');
-    $('faceState').textContent = !s.cameraOn ? '–' : faceOk ? 'tracking' : 'low confidence';
-    if (s.lastGesture) {
-      const ago = Math.max(0, Math.round((Date.now() - s.lastGesture.at) / 1000));
-      $('gestureState').textContent = `${s.lastGesture.type} · ${ago}s ago`;
+      DetectorError: 'face model failed — check extension files',
+      OverconstrainedError: 'camera settings unsupported',
+      AbortError: 'camera start interrupted — retry',
+      SecurityError: 'blocked by browser policy',
+      NotSupportedError: 'camera API unavailable in this browser',
+      TypeError: 'camera request invalid — reload extension',
+    };
+
+    const cameraOn = status?.cameraOn === true;
+    const cameraStarting = status?.cameraStarting === true;
+    const cameraError = status?.cameraError || '';
+    const targetActive = state.cameraTargetActive === true && state.enabled !== false;
+    const shouldOfferRetry = targetActive && !cameraOn && !cameraStarting && cameraError !== 'NotAllowedError';
+    $('retryCam').style.display = shouldOfferRetry ? '' : 'none';
+    $('fixCam').style.display = targetActive && !cameraOn && cameraError === 'NotAllowedError' ? '' : 'none';
+
+    $('camDot').className = 'dot' + (cameraOn ? ' on' : ((cameraError || cameraStarting) ? ' warn' : ''));
+    if (cameraOn) $('camState').textContent = 'on';
+    else if (cameraStarting) $('camState').textContent = 'starting…';
+    else if (cameraError) $('camState').textContent = camErrText[cameraError] || `error (${cameraError})`;
+    else if (state.enabled === false) $('camState').textContent = 'disabled';
+    else if (!state.feedActive) $('camState').textContent = 'off — not a feed';
+    else if (!state.cameraTargetActive) $('camState').textContent = 'off — select a supported feed';
+    else $('camState').textContent = status ? 'off — retry startup' : 'worker unavailable';
+    $('camState').title = cameraError ? `Camera error: ${cameraError}` : (status?.detectorError || '');
+
+    const faceOk = cameraOn && status?.engine && !status.engine.suspended;
+    $('faceDot').className = 'dot' + (cameraOn ? (faceOk ? ' on' : ' warn') : '');
+    $('faceState').textContent = !cameraOn
+      ? (cameraStarting ? 'starting' : '–')
+      : faceOk ? 'tracking' : 'low confidence';
+
+    if (status?.lastGesture) {
+      const ago = Math.max(0, Math.round((Date.now() - status.lastGesture.at) / 1000));
+      $('gestureState').textContent = `${status.lastGesture.type} · ${ago}s ago`;
     } else {
       $('gestureState').textContent = 'none yet — blink to test';
     }
-  } catch {
-    $('camState').textContent = 'off';
+  } catch (error) {
+    $('calibLine').textContent = `Extension unavailable: ${error?.message || error}`;
+    $('feedState').textContent = 'unknown';
+    $('camState').textContent = 'state unavailable';
     $('faceState').textContent = '–';
-    $('gestureState').textContent = '–';
+  } finally {
+    refreshing = false;
   }
 }
 
 $('enabled').addEventListener('change', async e => {
   await chrome.runtime.sendMessage({ type: 'SET_ENABLED', enabled: e.target.checked });
   refresh();
+});
+$('retryCam').addEventListener('click', async () => {
+  $('camState').textContent = 'retrying…';
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'RETRY_CAMERA' });
+    if (result?.ok !== true) throw new Error(result?.error || 'Retry failed');
+  } catch (error) {
+    $('camState').textContent = `retry failed: ${error?.message || error}`;
+  }
+  await refresh();
 });
 $('fixCam').addEventListener('click', () => {
   // Opens the interview, which asks for the camera in a visible tab.
@@ -71,5 +116,5 @@ $('how').addEventListener('click', () => {
   chrome.tabs.create({ url: 'https://github.com/onlyprthh/blinkscroll#how-it-works' });
 });
 
-refresh();
-setInterval(refresh, 2000);
+void refresh();
+setInterval(() => { void refresh(); }, 2000);

@@ -47,7 +47,7 @@ BROWSERS = {
             "~/Library/Application Support/BraveSoftware/Brave-Browser",
             "%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data",
         ],
-        "procs": ["brave", "brave.exe"],
+        "procs": ["brave", "brave.exe", "brave browser"],
     },
     "chrome": {
         "label": "Google Chrome",
@@ -62,7 +62,7 @@ BROWSERS = {
             "~/Library/Application Support/Google/Chrome",
             "%LOCALAPPDATA%/Google/Chrome/User Data",
         ],
-        "procs": ["chrome", "chrome.exe"],
+        "procs": ["chrome", "chrome.exe", "google chrome"],
     },
     "edge": {
         "label": "Microsoft Edge",
@@ -77,7 +77,7 @@ BROWSERS = {
             "~/Library/Application Support/Microsoft Edge",
             "%LOCALAPPDATA%/Microsoft/Edge/User Data",
         ],
-        "procs": ["msedge", "msedge.exe", "edge"],
+        "procs": ["msedge", "msedge.exe", "edge", "microsoft edge"],
     },
     "chromium": {
         "label": "Chromium",
@@ -208,12 +208,22 @@ def is_running(key: str) -> bool:
     procs = BROWSERS[key]["procs"]
     try:
         if SYSTEM == "Windows":
-            out = subprocess.run(["tasklist"], capture_output=True,
-                                 text=True, timeout=10).stdout.lower()
+            import csv
+            out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"],
+                                 capture_output=True, text=True, timeout=10).stdout
+            running_names = {
+                row[0].strip().lower() for row in csv.reader(out.splitlines()) if row
+            }
         else:
             out = subprocess.run(["ps", "-A", "-o", "comm="], capture_output=True,
-                                 text=True, timeout=10).stdout.lower()
-        return any(p.lower() in out for p in procs)
+                                 text=True, timeout=10).stdout
+            # Exact process-name matches avoid treating chrome_crashpad or another
+            # helper process as a running browser.
+            running_names = {
+                os.path.basename(line.strip()).lower()
+                for line in out.splitlines() if line.strip()
+            }
+        return any(name.lower() in running_names for name in procs)
     except Exception:
         return False
 
@@ -236,12 +246,42 @@ def set_permanent(key: str, enable: bool) -> bool:
     return False
 
 
+def update_extension_argument(content: str, enable: bool, extension_dir: str = EXT_DIR) -> str | None:
+    """Idempotently add/remove only BlinkScroll's own --load-extension flag.
+
+    Returns None if enabling but no usable Exec line exists.
+    """
+    import re
+    argument = f"--load-extension={extension_dir}"
+    # Match quoted or unquoted exact tokens; preserve every unrelated extension flag.
+    tokens = (re.escape(argument), re.escape('"' + argument + '"'))
+    for token in tokens:
+        content = re.sub(r"(?<!\S)" + token + r"(?=\s|$)", "", content)
+    if enable:
+        flag = '"' + argument + '"' if any(ch.isspace() for ch in argument) else argument
+        def insert_flag(match):
+            suffix = match.group(2)
+            suffix = (" " + suffix.lstrip()) if suffix.strip() else ""
+            return match.group(1) + " " + flag + suffix
+
+        content, count = re.subn(
+            r'^(Exec=(?:"[^"]+"|\S+))(.*)$',
+            insert_flag,
+            content,
+            flags=re.M,
+        )
+        if count == 0:
+            return None
+    return content
+
+
 def set_permanent_linux(key: str, enable: bool) -> bool:
     import re
     desktop_name = BROWSERS[key]["desktop"]
     src = None
-    for d in ("/usr/share/applications",
-              os.path.expanduser("~/.local/share/applications")):
+    # Prefer an existing user override so --undo preserves its unrelated edits.
+    for d in (os.path.expanduser("~/.local/share/applications"),
+              "/usr/share/applications"):
         cand = os.path.join(d, desktop_name)
         if os.path.exists(cand):
             src = cand
@@ -255,16 +295,11 @@ def set_permanent_linux(key: str, enable: bool) -> bool:
     dst = os.path.join(dst_dir, desktop_name)
     with open(src) as f:
         content = f.read()
-    # strip any previous flag first (idempotent)
-    content = re.sub(r"\s*--load-extension=\S+", "", content)
-    if enable:
-        flag = f"--load-extension={EXT_DIR}"
-        # insert right after the binary, before %U/%F field codes
-        content, n = re.subn(r"^(Exec=\S+)(.*)$", r"\1 " + flag + r"\2",
-                             content, flags=re.M)
-        if n == 0:
-            print("Could not parse the Exec line in the launcher file.")
-            return False
+    updated = update_extension_argument(content, enable)
+    if updated is None:
+        print("Could not parse the Exec line in the launcher file.")
+        return False
+    content = updated
     with open(dst, "w") as f:
         f.write(content)
     try:  # best effort; harmless if the tool is missing
@@ -289,6 +324,7 @@ def set_permanent_windows(key: str, enable: bool) -> bool:
     flag = f"--load-extension={EXT_DIR}"
     ps = r"""
 $flag = $args[0]; $exe = $args[1]; $enable = $args[2] -eq '1'
+$flagRegex = [regex]::Escape($flag)
 $dirs = @("$env:USERPROFILE\Desktop",
           "$env:APPDATA\Microsoft\Windows\Start Menu\Programs")
 $fixed = 0
@@ -297,9 +333,13 @@ foreach ($dir in $dirs) {
   Get-ChildItem $dir -Filter *.lnk -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
     $sh = New-Object -ComObject WScript.Shell
     $lnk = $sh.CreateShortcut($_.FullName)
-    if ($lnk.TargetPath -like "*$exe") {
-      $a = $lnk.Arguments -replace '\s*--load-extension=\S+', ''
-      if ($enable) { $a = ($a + ' ' + $flag).Trim() }
+    if ([IO.Path]::GetFileName($lnk.TargetPath) -ieq $exe) {
+      # Preserve unrelated --load-extension arguments on the shortcut.
+      $a = [regex]::Replace($lnk.Arguments, '(?i)(?<!\S)"?' + $flagRegex + '"?(?=\s|$)', ' ').Trim()
+      if ($enable) {
+        $token = if ($flag -match '\s') { '"' + $flag + '"' } else { $flag }
+        $a = ($a + ' ' + $token).Trim()
+      }
       $lnk.Arguments = $a; $lnk.Save(); $fixed++
     }
   }
@@ -371,7 +411,15 @@ def main() -> int:
     print(f"Binary  : {binary}")
     print(f"Extension: {EXT_DIR}")
 
+    if permanent and undo:
+        print("ERROR: choose either --permanent or --undo, not both.")
+        return 1
+
     if permanent or undo:
+        if dry:
+            action = "install" if permanent else "remove"
+            print(f"dry-run: would {action} BlinkScroll's launcher flag for {BROWSERS[key]['label']}.")
+            return 0
         # Patch the launcher so the extension loads on EVERY start.
         # No need to close the browser — this takes effect next launch.
         ok = set_permanent(key, enable=permanent)

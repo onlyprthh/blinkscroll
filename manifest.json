@@ -9,11 +9,15 @@
   "content_scripts": [
     {
       "js": [
+        "src/site-routing.js",
         "content.js"
       ],
       "matches": [
+        "*://instagram.com/*",
         "*://www.instagram.com/*",
+        "*://tiktok.com/*",
         "*://www.tiktok.com/*",
+        "*://youtube.com/*",
         "*://www.youtube.com/*"
       ],
       "run_at": "document_idle"
@@ -21,8 +25,11 @@
   ],
   "description": "Scroll reels & shorts with your blinks. Hands-free, 100% on-device \u2014 no video ever leaves your laptop.",
   "host_permissions": [
+    "*://instagram.com/*",
     "*://www.instagram.com/*",
+    "*://tiktok.com/*",
     "*://www.tiktok.com/*",
+    "*://youtube.com/*",
     "*://www.youtube.com/*"
   ],
   "icons": {
@@ -39,7 +46,7 @@
     "tabs",
     "scripting"
   ],
-  "version": "0.2.0",
+  "version": "0.2.4",
   "sandbox": {
     "pages": [
       "sandbox/detect.html"

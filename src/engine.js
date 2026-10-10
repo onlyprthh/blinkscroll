@@ -1,122 +1,153 @@
-// engine.js — BlinkScroll gesture state machine.
-// Pure logic: no DOM, no chrome.* APIs. Runs in the offscreen document live,
-// and is unit-tested in node with synthetic EAR streams (see test/engine.test.mjs).
-//
-// Gesture map (v1, locked 2026-10-10):
-//   single deliberate blink  -> next reel
-//   double blink (2 in window)-> previous reel
-//   eyes closed >= longMs    -> pause / resume toggle
-// Involuntary blinks (below the personal singleMinMs floor) never fire.
+// BlinkScroll gesture state machine — intentionally DOM/chrome API free.
+// Synthetic frame streams are tested with Node's built-in test runner.
 
-// --- Eye Aspect Ratio -------------------------------------------------------
-// MediaPipe FaceLandmarker gives 478 landmarks. Standard EAR index sets:
 const LEFT_EYE = { p1: 33, p4: 133, p2: 160, p6: 144, p3: 158, p5: 153 };
 const RIGHT_EYE = { p1: 263, p4: 362, p2: 387, p6: 373, p3: 385, p5: 380 };
 
 function dist(a, b) {
+  if (!a || !b || !Number.isFinite(a.x) || !Number.isFinite(a.y) ||
+      !Number.isFinite(b.x) || !Number.isFinite(b.y)) return NaN;
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function eyeAspectRatio(lm, eye) {
-  const p1 = lm[eye.p1], p2 = lm[eye.p2], p3 = lm[eye.p3];
-  const p4 = lm[eye.p4], p5 = lm[eye.p5], p6 = lm[eye.p6];
+function eyeAspectRatio(landmarks, eye) {
+  if (!Array.isArray(landmarks)) return null;
+  const p1 = landmarks[eye.p1], p2 = landmarks[eye.p2], p3 = landmarks[eye.p3];
+  const p4 = landmarks[eye.p4], p5 = landmarks[eye.p5], p6 = landmarks[eye.p6];
   if (!p1 || !p2 || !p3 || !p4 || !p5 || !p6) return null;
   const vertical = dist(p2, p6) + dist(p3, p5);
   const horizontal = 2 * dist(p1, p4);
-  return horizontal === 0 ? null : vertical / horizontal;
+  if (!Number.isFinite(vertical) || !Number.isFinite(horizontal) || horizontal <= 0) return null;
+  const ear = vertical / horizontal;
+  return Number.isFinite(ear) && ear >= 0 ? ear : null;
 }
 
-/** Average EAR across both eyes. null when landmarks are unusable. */
-export function earFromLandmarks(lm) {
-  const l = eyeAspectRatio(lm, LEFT_EYE);
-  const r = eyeAspectRatio(lm, RIGHT_EYE);
-  if (l == null || r == null) return null;
-  return (l + r) / 2;
+/** Average EAR across both eyes; null means the landmarks are unusable. */
+export function earFromLandmarks(landmarks) {
+  const left = eyeAspectRatio(landmarks, LEFT_EYE);
+  const right = eyeAspectRatio(landmarks, RIGHT_EYE);
+  if (left == null || right == null) return null;
+  const ear = (left + right) / 2;
+  return Number.isFinite(ear) ? ear : null;
 }
 
-export function median(arr) {
-  if (!arr.length) return 0;
-  const s = [...arr].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+// A near-zero EAR is a valid closed-eye frame, not proof that the face vanished.
+export function isPlausibleEAR(ear) {
+  return Number.isFinite(ear) && ear >= 0 && ear < 0.8;
+}
+
+export function median(values) {
+  if (!Array.isArray(values)) return 0;
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return 0;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+const clamp = (value, min, max, fallback) =>
+  Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+
+// Don't trust storage blindly: profiles may be old, partial or manually edited.
+export function normalizeProfile(profile = {}) {
+  const source = profile && typeof profile === 'object' ? profile : {};
+  const p = { ...DEFAULT_PROFILE, ...source };
+  p.version = 1;
+  p.earOpenMedian = clamp(p.earOpenMedian, 0.08, 0.55, DEFAULT_PROFILE.earOpenMedian);
+  p.earClosedFactor = clamp(p.earClosedFactor, 0.4, 0.9, DEFAULT_PROFILE.earClosedFactor);
+  p.naturalMs = Math.round(clamp(p.naturalMs, 60, 400, DEFAULT_PROFILE.naturalMs));
+  p.singleMinMs = Math.round(clamp(p.singleMinMs, 120, 1200, DEFAULT_PROFILE.singleMinMs));
+  p.singleMaxMs = Math.round(clamp(p.singleMaxMs, p.singleMinMs + 50, 1800, DEFAULT_PROFILE.singleMaxMs));
+  p.doubleGapMs = Math.round(clamp(p.doubleGapMs, 200, 1200, DEFAULT_PROFILE.doubleGapMs));
+  p.longMs = Math.round(clamp(p.longMs, 800, 4000, DEFAULT_PROFILE.longMs));
+  p.cooldownMs = Math.round(clamp(p.cooldownMs, 300, 5000, DEFAULT_PROFILE.cooldownMs));
+  p.minConfidence = clamp(p.minConfidence, 0.1, 1, DEFAULT_PROFILE.minConfidence);
+  p.calibratedAt = clamp(p.calibratedAt, 0, Number.MAX_SAFE_INTEGER, 0);
+  return p;
 }
 
 // --- BlinkSampler -----------------------------------------------------------
-// Low-level open/closed tracking. Emits raw blink events; shared by the live
-// engine and the interview page (which needs raw samples, not gestures).
 export class BlinkSampler {
   constructor(earClosedThreshold = 0.2) {
-    this.threshold = earClosedThreshold;
-    this.state = 'open'; // 'open' | 'closed'
+    this.threshold = clamp(earClosedThreshold, 0.01, 0.8, 0.2);
+    this.state = 'open';
     this.closeStart = 0;
   }
-  setThreshold(t) { this.threshold = t; }
-  isClosed() { return this.state === 'closed'; }
-  currentCloseDuration(nowMs) {
-    return this.state === 'closed' ? nowMs - this.closeStart : 0;
+
+  setThreshold(threshold) {
+    this.threshold = clamp(threshold, 0.01, 0.8, this.threshold);
   }
-  /** Feed one EAR sample. Returns [{type:'blink', durationMs, atMs}]. */
+
+  isClosed() { return this.state === 'closed'; }
+
+  currentCloseDuration(nowMs) {
+    return this.state === 'closed' && Number.isFinite(nowMs)
+      ? Math.max(0, nowMs - this.closeStart) : 0;
+  }
+
+  /** Feed one EAR sample; returns zero or one {type, durationMs, atMs} event. */
   feed(ear, nowMs) {
-    const events = [];
-    if (ear == null) return events;
+    if (!Number.isFinite(nowMs) || !Number.isFinite(ear) || ear < 0) return [];
     const closed = ear < this.threshold;
     if (this.state === 'open' && closed) {
       this.state = 'closed';
       this.closeStart = nowMs;
     } else if (this.state === 'closed' && !closed) {
-      events.push({ type: 'blink', durationMs: nowMs - this.closeStart, atMs: nowMs });
+      const durationMs = nowMs - this.closeStart;
       this.state = 'open';
+      this.closeStart = 0;
+      if (durationMs >= 0) return [{ type: 'blink', durationMs, atMs: nowMs }];
     }
-    return events;
+    return [];
   }
 }
 
 // --- Profile ----------------------------------------------------------------
 export const DEFAULT_PROFILE = {
   version: 1,
-  earOpenMedian: 0.28,  // learned in interview step 0 (typical open-eye EAR)
-  earClosedFactor: 0.72, // closed when EAR < earOpenMedian * factor
-  naturalMs: 130,        // median involuntary blink (interview step 0)
-  singleMinMs: 220,      // deliberate single-blink lower bound
-  singleMaxMs: 900,      // deliberate single-blink upper bound
-  doubleGapMs: 450,       // max reopen-to-reopen gap counting as a double blink
-  longMs: 1400,          // eyes-closed duration => pause/resume toggle
-  cooldownMs: 1200,      // quiet period after any fired gesture
-  minConfidence: 0.5,    // below this, gesture firing is suspended entirely
+  earOpenMedian: 0.28,
+  earClosedFactor: 0.72,
+  naturalMs: 130,
+  singleMinMs: 220,
+  singleMaxMs: 900,
+  doubleGapMs: 450,
+  longMs: 1400,
+  cooldownMs: 1200,
+  minConfidence: 0.5,
   calibratedAt: 0,
 };
 
-/** Build a personal profile from interview measurements. */
-export function profileFromInterview(m) {
-  const singleMed = median(m.singleMs || []);
-  const gapMed = median(m.doubleGaps || []);
-  const longMed = median(m.longMs || []);
-  return {
+/** Build a bounded personal profile from interview measurements. */
+export function profileFromInterview(measurements = {}) {
+  const singleMed = median(measurements.singleMs || []);
+  const gapMed = median(measurements.doubleGaps || []);
+  const longMed = median(measurements.longMs || []);
+  return normalizeProfile({
     version: 1,
-    earOpenMedian: m.earOpenMedian || 0.28,
+    earOpenMedian: measurements.earOpenMedian || DEFAULT_PROFILE.earOpenMedian,
     earClosedFactor: 0.72,
-    naturalMs: Math.round(m.naturalMs || 130),
+    naturalMs: Math.round(measurements.naturalMs || DEFAULT_PROFILE.naturalMs),
     singleMinMs: Math.round(Math.max(180, singleMed * 0.7)),
     singleMaxMs: Math.round(Math.max(950, singleMed * 1.8)),
     doubleGapMs: Math.round(Math.min(900, Math.max(350, gapMed + 200))),
     longMs: Math.round(Math.min(2000, Math.max(1000, longMed * 0.9))),
-    cooldownMs: 1200,
-    minConfidence: 0.5,
+    cooldownMs: DEFAULT_PROFILE.cooldownMs,
+    minConfidence: DEFAULT_PROFILE.minConfidence,
     calibratedAt: Date.now(),
-  };
+  });
 }
 
 // --- BlinkEngine ------------------------------------------------------------
 export class BlinkEngine {
   constructor(profile = {}) {
-    this.p = { ...DEFAULT_PROFILE, ...profile };
+    this.p = normalizeProfile(profile);
     this.sampler = new BlinkSampler(this.p.earOpenMedian * this.p.earClosedFactor);
     this.reset();
   }
 
   reset() {
     this.sampler.state = 'open';
-    this.pendingSingleAt = 0; // reopen-time of a blink awaiting double-check (0 = none)
+    this.sampler.closeStart = 0;
+    this.pendingSingleAt = 0;
     this.cooldownUntil = 0;
     this.longFired = false;
     this.baselineMs = this.p.naturalMs;
@@ -127,87 +158,93 @@ export class BlinkEngine {
   }
 
   /**
-   * Feed one frame. Returns gesture events:
-   *   {type:'single'|'double'|'long', atMs, durationMs?}
-   * nowMs must be monotonically increasing (ms).
+   * Feed one frame. Emits single/double/long gesture events.
+   * nowMs must be monotonic milliseconds (e.g. performance.now()).
    */
   update(ear, nowMs, confidence = 1) {
-    const events = [];
+    if (!Number.isFinite(nowMs)) return [];
+    const safeEar = Number.isFinite(ear) && ear >= 0 ? ear : null;
+    const safeConfidence = Number.isFinite(confidence) ? clamp(confidence, 0, 1, 0) : 0;
 
-    // 1. A pending single whose double-window expired becomes a confirmed single.
-    //    (We wait doubleGapMs after the first blink to see if a second arrives —
-    //    firing instantly would make every double-blink do next-then-previous.)
+    // Gate first: an expired pending single must never fire on a lost face,
+    // inactive tab, or disabled extension. Discard rather than replay it later.
+    if (safeConfidence < this.p.minConfidence) {
+      if (!this.suspended) {
+        this.suspended = true;
+        this.pendingSingleAt = 0;
+        this.longFired = false;
+        this.sampler.state = 'open';
+        this.sampler.closeStart = 0;
+      }
+      return [];
+    }
+    this.suspended = false;
+
+    const events = [];
     if (this.pendingSingleAt && nowMs - this.pendingSingleAt >= this.p.doubleGapMs) {
       this.pendingSingleAt = 0;
       events.push({ type: 'single', atMs: nowMs });
       this.cooldownUntil = nowMs + this.p.cooldownMs;
     }
 
-    // 2. Confidence gate: blind (dark room, face out of frame) => suspend firing.
-    //    Never guess — a wrong scroll is worse than no scroll.
-    if (confidence < this.p.minConfidence) {
-      if (!this.suspended) {
-        this.suspended = true;
-        this.pendingSingleAt = 0;
-        this.sampler.state = 'open'; // drop stale state so resume can't misfire
-      }
-      return events;
-    }
-    this.suspended = false;
-
     const inCooldown = nowMs < this.cooldownUntil;
 
-    // 3. Slowly adapt the closed-EAR threshold to lighting/angle drift.
-    if (ear != null && this.sampler.state === 'open' && ear >= this.sampler.threshold) {
-      this.openEarSamples.push(ear);
+    // Slow lighting/angle adaptation based on confident open-eye frames only.
+    if (safeEar != null && this.sampler.state === 'open' && safeEar >= this.sampler.threshold) {
+      this.openEarSamples.push(safeEar);
       if (this.openEarSamples.length > 240) this.openEarSamples.shift();
       if (++this.framesSinceEarUpdate >= 60) {
         this.framesSinceEarUpdate = 0;
-        const m = median(this.openEarSamples);
-        if (m > 0) {
+        const openMedian = median(this.openEarSamples);
+        if (openMedian > 0) {
           this.sampler.setThreshold(
-            Math.min(0.3, Math.max(0.12, m * this.p.earClosedFactor))
+            Math.min(0.3, Math.max(0.12, openMedian * this.p.earClosedFactor))
           );
         }
       }
     }
 
-    // 4. Long close fires while the eyes are still shut (no need to wait for reopen).
+    // Long close fires while shut; it does not need to wait for reopening.
     if (this.sampler.isClosed()) {
-      const dur = this.sampler.currentCloseDuration(nowMs);
-      if (!inCooldown && !this.longFired && dur >= this.p.longMs) {
+      const durationMs = this.sampler.currentCloseDuration(nowMs);
+      if (!inCooldown && !this.longFired && durationMs >= this.p.longMs) {
         this.longFired = true;
-        this.pendingSingleAt = 0; // a long close cancels any pending single
-        events.push({ type: 'long', durationMs: Math.round(dur), atMs: nowMs });
+        this.pendingSingleAt = 0;
+        events.push({ type: 'long', durationMs: Math.round(durationMs), atMs: nowMs });
         this.cooldownUntil = nowMs + this.p.cooldownMs;
       }
     }
 
-    // 5. Classify completed blinks.
-    for (const e of this.sampler.feed(ear, nowMs)) {
+    for (const event of this.sampler.feed(safeEar, nowMs)) {
+      // Clear the long-close suppression on reopening even during cooldown;
+      // otherwise the first deliberate blink after a pause gets swallowed.
+      if (this.longFired) {
+        this.longFired = false;
+        continue;
+      }
       if (inCooldown) continue;
-      if (this.longFired) { this.longFired = false; continue; } // reopen after a long close
-      const dur = e.durationMs;
-      if (dur < this.singleMinMs) { this.adaptBaseline(dur); continue; } // involuntary
-      if (dur > this.p.singleMaxMs) continue; // too long for single, too short for long: ignore
-      if (this.pendingSingleAt && e.atMs - this.pendingSingleAt <= this.p.doubleGapMs) {
+      const durationMs = event.durationMs;
+      if (durationMs < this.singleMinMs) {
+        this.adaptBaseline(durationMs);
+        continue;
+      }
+      if (durationMs > this.p.singleMaxMs) continue;
+
+      if (this.pendingSingleAt && event.atMs - this.pendingSingleAt <= this.p.doubleGapMs) {
         this.pendingSingleAt = 0;
-        events.push({ type: 'double', atMs: e.atMs });
-        this.cooldownUntil = e.atMs + this.p.cooldownMs;
+        events.push({ type: 'double', atMs: event.atMs });
+        this.cooldownUntil = event.atMs + this.p.cooldownMs;
       } else {
-        this.pendingSingleAt = e.atMs;
+        this.pendingSingleAt = event.atMs;
       }
     }
     return events;
   }
 
-  /** Nudge the involuntary-blink baseline from clean natural samples. */
-  adaptBaseline(dur) {
-    if (dur < 60 || dur > 260) return;
-    this.baselineMs = 0.92 * this.baselineMs + 0.08 * dur;
+  adaptBaseline(durationMs) {
+    if (durationMs < 60 || durationMs > 260) return;
+    this.baselineMs = 0.92 * this.baselineMs + 0.08 * durationMs;
     this.baselineMs = Math.min(260, Math.max(80, this.baselineMs));
-    // The deliberate floor always stays clearly above the involuntary baseline,
-    // so watering eyes can never hijack the feed.
     this.singleMinMs = Math.max(this.p.singleMinMs, this.baselineMs + 80);
   }
 
@@ -215,7 +252,7 @@ export class BlinkEngine {
     return {
       eyesClosed: this.sampler.isClosed(),
       suspended: this.suspended,
-      coolingDown: nowMs < this.cooldownUntil,
+      coolingDown: Number.isFinite(nowMs) && nowMs < this.cooldownUntil,
       baselineMs: Math.round(this.baselineMs),
       singleMinMs: Math.round(this.singleMinMs),
       earThreshold: +this.sampler.threshold.toFixed(3),

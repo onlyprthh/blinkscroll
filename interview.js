@@ -14,10 +14,23 @@ const video = $('cam'), ring = $('ring');
 const M = { earOpen: [], natural: [], single: [], gaps: [], long: [] };
 let sampler = new BlinkSampler(0.2);
 let detector = null, inFlight = false, lastVideoTime = -1;
+let cameraStream = null, rafId = 0, saving = false, missingFaceSince = 0;
 let stepIndex = 0, stepStart = 0, hintAt = 0;
 let count = 0;                 // completed samples this step
 let pendingFirstReopen = 0;    // double-blink pairing
 let done = false;
+
+function cleanupCamera() {
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = 0;
+  if (cameraStream) {
+    for (const track of cameraStream.getTracks()) track.stop();
+  }
+  cameraStream = null;
+  if (video) video.srcObject = null;
+}
+
+window.addEventListener('pagehide', cleanupCamera);
 
 const STEPS = [
   { id: 'face',   label: 'Face check' },
@@ -125,79 +138,136 @@ function showReview() {
 }
 
 async function save(useDefaults = false) {
-  const prev = (await chrome.storage.local.get('profile')).profile || null;
-  const profile = useDefaults
-    ? { ...DEFAULT_PROFILE, calibratedAt: 0 }
-    : profileFromInterview({
-        earOpenMedian: median(M.earOpen) || 0.28,
-        naturalMs: median(M.natural) || 130,
-        singleMs: M.single, doubleGaps: M.gaps, longMs: M.long,
-      });
-  // Previous profile is kept as a fallback; the old one stays live if the
-  // user closes this tab without saving (nothing is written until now).
-  await chrome.storage.local.set({ profile, prevProfile: prev });
-  // The offscreen worker can't read chrome.storage — push the new profile
-  // to it directly (no-op if it isn't running).
-  try { await chrome.runtime.sendMessage({ type: 'PROFILE_UPDATED', profile }); }
-  catch { /* offscreen doc not running yet */ }
-  done = true;
-  document.querySelector('.card').innerHTML = `
-    <div class="done-icon">👁️✓</div>
-    <h1 style="text-align:center">You're calibrated</h1>
-    <p class="lede" style="text-align:center">
-      ${useDefaults ? 'Using defaults — you can calibrate properly anytime from the popup.'
-                    : 'BlinkScroll learned your eyes.'}<br><br>
-      Open <b>Instagram Reels</b>, <b>TikTok</b>, or <b>YouTube Shorts</b> and blink.<br>
-      <span style="color:#6b6b76">single blink → next · double blink → previous · long close → pause</span>
-    </p>
-    <div class="btns"><button class="primary" onclick="window.close()">Close this tab</button></div>`;
+  if (done || saving) return;
+  saving = true;
+  const saveButton = $('bSave');
+  if (saveButton) saveButton.disabled = true;
+
+  try {
+    const stored = await chrome.storage.local.get('profile');
+    const prev = stored.profile || null;
+    const profile = useDefaults
+      ? { ...DEFAULT_PROFILE, calibratedAt: 0 }
+      : profileFromInterview({
+          earOpenMedian: median(M.earOpen) || 0.28,
+          naturalMs: median(M.natural) || 130,
+          singleMs: M.single, doubleGaps: M.gaps, longMs: M.long,
+        });
+
+    await chrome.storage.local.set({ profile, prevProfile: prev });
+    done = true;
+    cleanupCamera();
+
+    // Push the new profile to a running worker. If it is not running, the
+    // profile remains stored and is included when the active feed is armed.
+    try { await chrome.runtime.sendMessage({ type: 'PROFILE_UPDATED', profile }); }
+    catch { /* No offscreen document exists yet. */ }
+
+    const card = document.querySelector('.card');
+    card.innerHTML = `
+      <div class="done-icon">👁️✓</div>
+      <h1 style="text-align:center">You're calibrated</h1>
+      <p class="lede" style="text-align:center">
+        ${useDefaults ? 'Using defaults — you can calibrate properly anytime from the popup.'
+                      : 'BlinkScroll learned your eyes.'}<br><br>
+        Open <b>Instagram Reels</b>, <b>TikTok</b>, or <b>YouTube Shorts</b> and blink.<br>
+        <span style="color:#6b6b76">single blink → next · double blink → previous · long close → pause</span>
+      </p>
+      <div class="btns"><button class="primary" id="doneClose">Close this tab</button></div>`;
+    $('doneClose').addEventListener('click', () => window.close());
+  } catch (error) {
+    saving = false;
+    if (saveButton) saveButton.disabled = false;
+    $('status').textContent = `Could not save calibration: ${error?.message || error}. Please try again.`;
+  }
 }
 
 // --- detection loop ---------------------------------------------------------
+function handleMissingFace(now) {
+  // Never allow a period of lost landmarks to count as a blink/long close.
+  sampler.state = 'open';
+  sampler.closeStart = 0;
+  pendingFirstReopen = 0;
+  ring.classList.remove('ok');
+  if (!missingFaceSince) missingFaceSince = now;
+
+  const id = STEPS[stepIndex]?.id;
+  if (id === 'face') {
+    const elapsed = (now - stepStart) / 1000;
+    $('bar').style.width = Math.min(100, (elapsed / 20) * 100) + '%';
+    $('status').textContent = 'No face detected — move into frame or use defaults below.';
+  } else if (now - missingFaceSince > 1000 && id !== 'review') {
+    $('status').textContent = 'Face tracking paused — move back into the frame.';
+  }
+}
+
 async function init() {
   detector = new SandboxDetector(document.getElementById('detector'));
   await detector.ready;
+  if (done) return;
   if (detector.failed) {
-    $('instr').innerHTML = `<span class="warn">Couldn't load the face model: ${detector.failed}</span>`;
+    $('instr').textContent = `Couldn't load the face model: ${detector.failed}`;
     return;
   }
+
   try {
-    const s = await navigator.mediaDevices.getUserMedia({
+    cameraStream = await navigator.mediaDevices.getUserMedia({
       video: { width: 640, height: 480, facingMode: 'user' }, audio: false,
     });
-    video.srcObject = s;
+    if (done) {
+      cleanupCamera();
+      return;
+    }
+    video.srcObject = cameraStream;
     await video.play();
-  } catch {
-    $('instr').innerHTML =
-      'Camera access was denied. BlinkScroll needs your webcam to see your blinks — ' +
-      'everything is processed on this page and nothing is uploaded.<br><br>' +
-      'Allow the camera and reload this tab to try again.';
+    if (done) {
+      cleanupCamera();
+      return;
+    }
+  } catch (error) {
+    if (!done) {
+      $('instr').textContent = `Camera unavailable (${error?.name || 'error'}). Allow camera access, close other apps using it, then reload this tab. Video stays on this device.`;
+    }
+    cleanupCamera();
     return;
   }
+
   enterStep();
-  requestAnimationFrame(loop);
+  rafId = requestAnimationFrame(loop);
 }
 
 function loop() {
-  requestAnimationFrame(loop);
-  if (done || inFlight || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  if (done || !cameraStream) {
+    rafId = 0;
+    return;
+  }
+  rafId = requestAnimationFrame(loop);
+  if (inFlight || video.readyState < 2 || video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
   const now = performance.now();
   inFlight = true;
   createImageBitmap(video, {
     resizeWidth: 480, resizeHeight: 360, resizeQuality: 'pixelated',
-  }).then(
-    (bitmap) => detector.detect(bitmap, now).then(
-      ({ ear, hasFace }) => {
-        inFlight = false;
-        ring.classList.toggle('ok', hasFace);
-        if (ear == null) return;
-        handleEar(ear, now);
-      },
-      () => { inFlight = false; }
-    ),
-    () => { inFlight = false; }
-  );
+  }).then(bitmap => detector.detect(bitmap, now).then(
+    ({ ear, hasFace }) => {
+      inFlight = false;
+      if (done) return;
+      ring.classList.toggle('ok', hasFace);
+      if (ear == null || !hasFace) {
+        handleMissingFace(now);
+        return;
+      }
+      missingFaceSince = 0;
+      handleEar(ear, now);
+    },
+    () => {
+      inFlight = false;
+      if (!done) handleMissingFace(performance.now());
+    }
+  ), () => {
+    inFlight = false;
+    if (!done) handleMissingFace(performance.now());
+  });
 }
 
 // Per-frame EAR consumer: the interview's step state machine (unchanged).
@@ -275,4 +345,7 @@ function handleEar(ear, now) {
 
 $('skip').onclick = () => save(true);
 
-init();
+init().catch(error => {
+  cleanupCamera();
+  if (!done) $('instr').textContent = `Calibration could not start: ${error?.message || error}`;
+});

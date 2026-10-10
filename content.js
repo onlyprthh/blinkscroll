@@ -7,17 +7,20 @@ window.__blinkscroll_injected = true;
 // executes scroll/pause commands from blink gestures. No camera access here.
 
 let feedActive = false;
+let extensionEnabled = true;
 let lastDomCheck = 0;
 let domFeed = false;
+let reportedFeedState = null;
+let reportPending = false;
 
 function isFeed() {
+  // Known site routes are shared with the service worker. This prevents the
+  // popup and content script disagreeing about whether a tab is a feed.
+  if (globalThis.BlinkScrollRouting?.isSupportedHostUrl(location.href)) {
+    return globalThis.BlinkScrollRouting.isFeedUrl(location.href);
+  }
   const h = location.hostname;
   const p = location.pathname;
-  if (h.includes('instagram.com')) return p.startsWith('/reels') || p.startsWith('/reel/');
-  if (h.includes('tiktok.com')) {
-    return p === '/' || p.startsWith('/foryou') || /\/@[^/]+\/video\//.test(p);
-  }
-  if (h.includes('youtube.com')) return p.startsWith('/shorts');
   // Unknown host or path: auto-detect a reel-style feed from the DOM itself,
   // so new layouts/paths keep working without an update.
   const now = performance.now();
@@ -45,10 +48,22 @@ function looksLikeReelFeed() {
 
 function report() {
   const f = isFeed();
-  if (f !== feedActive) {
-    feedActive = f;
-    chrome.runtime.sendMessage({ type: f ? 'FEED_ACTIVE' : 'FEED_INACTIVE' });
-  }
+  feedActive = f;
+  // If the service worker was restarting when the first report was sent, retry
+  // on the next poll instead of getting stuck forever in an unreported state.
+  if (reportPending || reportedFeedState === f) return;
+  reportPending = true;
+  chrome.runtime.sendMessage({ type: f ? 'FEED_ACTIVE' : 'FEED_INACTIVE' })
+    .then(response => {
+      if (response?.ok === true) {
+        reportedFeedState = f;
+        if (typeof response.enabled === 'boolean') extensionEnabled = response.enabled;
+      } else {
+        reportedFeedState = null;
+      }
+    })
+    .catch(() => { reportedFeedState = null; })
+    .finally(() => { reportPending = false; });
 }
 
 // These are SPAs — URL changes without reloads. A 1s poll is the robust way
@@ -57,7 +72,11 @@ setInterval(report, 1000);
 report();
 
 chrome.runtime.onMessage.addListener(msg => {
-  if (msg.type !== 'DO_GESTURE' || !feedActive) return;
+  if (msg?.type === 'ENABLED_CHANGED') {
+    extensionEnabled = msg.enabled !== false;
+    return;
+  }
+  if (msg?.type !== 'DO_GESTURE' || !feedActive || !extensionEnabled) return;
   if (msg.gesture === 'single') scrollFeed(1);   // next reel
   else if (msg.gesture === 'double') scrollFeed(-1); // previous reel
   else if (msg.gesture === 'long') togglePause();    // pause / resume
@@ -80,17 +99,24 @@ function findFeedScroller() {
     }
     el = el.parentElement;
   }
+  // Some feeds scroll the document itself rather than an ancestor of the video.
+  const root = document.scrollingElement;
+  if (root && root.scrollHeight > root.clientHeight + 8) return root;
   return null;
 }
 
 function scrollFeed(dir) {
   const scroller = findFeedScroller();
   if (scroller) {
-    // One viewport = exactly one reel on all three scroll-snap feeds.
-    scroller.scrollBy({ top: dir * scroller.clientHeight, behavior: 'smooth' });
-  } else {
-    pressArrow(dir > 0 ? 'ArrowDown' : 'ArrowUp'); // fallback: site keybindings
+    const distance = Math.max(scroller.clientHeight, window.innerHeight);
+    scroller.scrollBy({ top: dir * distance, behavior: 'smooth' });
+    return;
   }
+
+  // Last resort for feeds whose scroll container is hidden behind a player
+  // component. Synthetic arrows are kept as a secondary site-specific hint.
+  window.scrollBy({ top: dir * window.innerHeight, behavior: 'smooth' });
+  pressArrow(dir > 0 ? 'ArrowDown' : 'ArrowUp');
 }
 
 function pressArrow(key) {
@@ -120,7 +146,18 @@ function togglePause() {
   );
   if (!vids.length) return;
   vids.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);
-  vids[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  const video = vids[0];
+
+  // Programmatic media controls are more reliable than an untrusted synthetic
+  // click, which browser/player default handlers are allowed to ignore.
+  if (video.paused || video.ended) {
+    video.play().catch(() => {
+      video.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+  } else {
+    video.pause();
+    video.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  }
 }
 
 } // __blinkscroll_injected
