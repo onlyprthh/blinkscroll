@@ -5,9 +5,11 @@ async function refresh() {
   const state = await chrome.runtime.sendMessage({ type: 'GET_STATE' });
   $('enabled').checked = state.enabled;
   $('feedState').textContent = state.feedActive ? 'detected ✓' : 'not on a feed';
-  $('calibLine').textContent = state.hasProfile
-    ? 'calibrated ' + new Date(state.calibratedAt).toLocaleDateString()
-    : 'not calibrated yet — run the interview';
+  $('calibLine').textContent = !state.hasProfile
+    ? 'not calibrated yet — run the interview'
+    : state.calibratedAt
+      ? 'calibrated ' + new Date(state.calibratedAt).toLocaleDateString()
+      : 'using default timings — calibrate for best results';
 
   // Ask the offscreen worker for live camera/face status (may not exist yet).
   try {

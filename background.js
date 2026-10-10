@@ -108,7 +108,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // async sendResponse
 });
 
-chrome.tabs.onRemoved.addListener(id => armedTabs.delete(id));
+chrome.tabs.onRemoved.addListener(id => {
+  if (armedTabs.delete(id)) {
+    // The offscreen worker keeps its own armed set — tell it, or its camera
+    // would run forever watching a tab that no longer exists.
+    chrome.runtime.sendMessage({ type: 'DISARM', tabId: id }).catch(() => {});
+  }
+});
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   if (armedTabs.has(tabId)) lastArmedTabId = tabId;
 });
