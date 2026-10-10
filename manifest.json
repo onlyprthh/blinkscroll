@@ -32,6 +32,7 @@
   },
   "manifest_version": 3,
   "name": "BlinkScroll",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArrplDIZqGHCC9ymI5UNmqtEIgo8kxwHZaotD2AGYmDsJzlMCdgs2huqHvKVy5fu74Vpv6f8gN8BKwaQlcAVlCMMROcdFIxI168aquOkrEho4crMc9lFUye671gkLUIJlPw2My+UPv/klvesXT7m2urpgM6N/ntoY6QLqjwsuYoO1r6r1BjALenz7v0xeNNP49LAjGyi3ZewXNE4pMEIvVCBAj8+CJcz2dQMJsBkWq8hipC+MdriZ7XLc8yPr3eQksFGMItufEBHE/3YaHP6WyHTEOZ6EwsTJIyhk0KmN7SegNkZwHFs0waimNbQjqsdXN8gkrOdK2R6eQdWg+8ENmwIDAQAB",
   "permissions": [
     "storage",
     "offscreen",

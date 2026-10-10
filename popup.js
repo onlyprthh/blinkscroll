@@ -20,6 +20,11 @@ async function refresh() {
     $('camDot').className = 'dot' + (s.cameraOn ? ' on' : (s.cameraError ? ' warn' : ''));
     $('camState').textContent = s.cameraOn ? 'on' : (camErrText || 'off');
     $('camState').title = s.cameraError ? `Camera error: ${s.cameraError}` : '';
+    // NotAllowedError = the extension's camera permission was denied or never
+    // granted (e.g. after reinstalling under a new extension id). The fix is
+    // to grant it in a visible tab — the interview requests it on load.
+    const needGrant = !s.cameraOn && s.cameraError === 'NotAllowedError';
+    $('fixCam').style.display = needGrant ? '' : 'none';
     const faceOk = s.cameraOn && !s.engine.suspended;
     $('faceDot').className = 'dot' + (s.cameraOn ? (faceOk ? ' on' : ' warn') : '');
     $('faceState').textContent = !s.cameraOn ? '–' : faceOk ? 'tracking' : 'low confidence';
@@ -39,6 +44,12 @@ async function refresh() {
 $('enabled').addEventListener('change', async e => {
   await chrome.runtime.sendMessage({ type: 'SET_ENABLED', enabled: e.target.checked });
   refresh();
+});
+$('fixCam').addEventListener('click', () => {
+  // Opens the interview, which asks for the camera in a visible tab.
+  // Granting it there covers the whole extension (same origin).
+  chrome.tabs.create({ url: chrome.runtime.getURL('interview.html') });
+  window.close();
 });
 $('testScroll').addEventListener('click', async () => {
   // Bypass blink detection entirely: send a "next" straight to this tab's

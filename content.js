@@ -7,16 +7,40 @@ window.__blinkscroll_injected = true;
 // executes scroll/pause commands from blink gestures. No camera access here.
 
 let feedActive = false;
+let lastDomCheck = 0;
+let domFeed = false;
 
 function isFeed() {
   const h = location.hostname;
   const p = location.pathname;
-  if (h.includes('instagram.com')) return p.startsWith('/reels');
+  if (h.includes('instagram.com')) return p.startsWith('/reels') || p.startsWith('/reel/');
   if (h.includes('tiktok.com')) {
     return p === '/' || p.startsWith('/foryou') || /\/@[^/]+\/video\//.test(p);
   }
   if (h.includes('youtube.com')) return p.startsWith('/shorts');
-  return false;
+  // Unknown host or path: auto-detect a reel-style feed from the DOM itself,
+  // so new layouts/paths keep working without an update.
+  const now = performance.now();
+  if (now - lastDomCheck > 3000) {
+    lastDomCheck = now;
+    domFeed = looksLikeReelFeed();
+  }
+  return domFeed;
+}
+
+function looksLikeReelFeed() {
+  try {
+    // A portrait video dominating the viewport inside something scrollable
+    // is a reels/shorts-style feed, whatever the URL says.
+    const vids = [...document.querySelectorAll('video')].filter(v =>
+      v.offsetParent !== null && v.readyState > 0 &&
+      v.videoHeight > v.videoWidth && v.clientHeight > window.innerHeight * 0.6);
+    if (!vids.length) return false;
+    return !!findFeedScroller() ||
+      document.documentElement.scrollHeight > window.innerHeight + 8;
+  } catch {
+    return false;
+  }
 }
 
 function report() {
