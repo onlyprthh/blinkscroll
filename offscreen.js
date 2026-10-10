@@ -8,7 +8,22 @@ let detectorFailed = null;
 let detectorPromise = null;
 let stream = null;
 let video = null;
-let rafId = 0;
+let pumpId = 0;
+// requestAnimationFrame NEVER fires inside a hidden offscreen document —
+// Chromium produces no BeginFrames for pages that never paint, so an rAF
+// loop registers once and then is dead forever. The frame pump is therefore
+// timer-driven; timers are not throttled in offscreen documents.
+const PUMP_INTERVAL_MS = 40; // ~25 fps
+
+function startPump() {
+  stopPump();
+  pumpId = setInterval(pumpTick, PUMP_INTERVAL_MS);
+}
+
+function stopPump() {
+  if (pumpId) clearInterval(pumpId);
+  pumpId = 0;
+}
 let lastVideoTime = -1;
 let inFlightGeneration = null;
 let cameraStartPromise = null;
@@ -195,7 +210,7 @@ async function startCameraForGeneration(generation) {
     }
     cameraError = null;
     lastVideoTime = -1;
-    loop();
+    startPump();
   } catch (err) {
     newStream.getTracks().forEach(track => track.stop());
     if (stream === newStream) stream = null;
@@ -205,8 +220,7 @@ async function startCameraForGeneration(generation) {
 }
 
 function stopCamera() {
-  if (rafId) cancelAnimationFrame(rafId);
-  rafId = 0;
+  stopPump();
   if (stream) {
     for (const track of stream.getTracks()) track.stop();
   }
@@ -216,17 +230,16 @@ function stopCamera() {
   engine.reset(); // Never replay a half-finished blink after focus/tab changes.
 }
 
-function loop() {
+function pumpTick() {
   const liveStream = stream && stream.getTracks().some(track => track.readyState === 'live');
   if (!liveStream || !enabled || activeTabId === null) {
-    rafId = 0;
+    stopPump();
     if (stream && !liveStream) {
       stopCamera();
       cameraError = 'NotReadableError';
     }
     return;
   }
-  rafId = requestAnimationFrame(loop);
   const generation = cameraGeneration;
   if (!video || video.readyState < 2 || video.currentTime === lastVideoTime || inFlightGeneration === generation) return;
   lastVideoTime = video.currentTime;

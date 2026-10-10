@@ -29,3 +29,13 @@ test('popup describes status only and does not own camera lifetime', () => {
   assert.doesNotMatch(popup, /type:\s*['"]STOP_CAMERA['"]|type:\s*['"]SYNC_ACTIVE_FEED['"]|stopCamera\(/);
   assert.doesNotMatch(popup, /paused — browser focus/);
 });
+
+test('offscreen frame pump is timer-driven, never requestAnimationFrame', () => {
+  // rAF never fires inside a hidden offscreen document (no BeginFrames for
+  // pages that never paint). An rAF-driven pump registers once and dies,
+  // leaving the camera on with zero frames processed — the exact
+  // "camera on, blinking does nothing" failure.
+  const offscreen = readFileSync(new URL('../offscreen.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(offscreen, /requestAnimationFrame\s*\(/);
+  assert.match(offscreen, /setInterval\s*\(\s*pumpTick/);
+});

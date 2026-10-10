@@ -46,7 +46,7 @@
     "tabs",
     "scripting"
   ],
-  "version": "0.2.5",
+  "version": "0.2.6",
   "sandbox": {
     "pages": [
       "sandbox/detect.html"
