@@ -27,7 +27,13 @@ function init() {
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === 'ARM') {
       armedTabs.add(msg.tabId);
+      // Background includes the saved profile + enabled flag (we can't read
+      // chrome.storage from an offscreen document).
+      if (msg.profile) engine = new BlinkEngine(msg.profile);
+      if (typeof msg.enabled === 'boolean') enabled = msg.enabled;
       startCamera().catch((err) => console.warn('[blinkscroll] camera failed:', err));
+    } else if (msg.type === 'PROFILE_UPDATED') {
+      if (msg.profile) engine = new BlinkEngine(msg.profile);
     } else if (msg.type === 'DISARM') {
       armedTabs.delete(msg.tabId);
       if (armedTabs.size === 0) stopCamera(); // camera light off when not on a feed
@@ -64,15 +70,11 @@ async function initAsync() {
   if (detectorFailed) {
     console.error('[blinkscroll] detector failed:', detectorFailed);
   }
-
-  const data = await chrome.storage.local.get(['profile', 'enabled']);
-  if (data.profile) engine = new BlinkEngine(data.profile);
-  enabled = data.enabled !== false;
-
-  chrome.storage.onChanged.addListener((changes) => {
-    if (changes.profile?.newValue) engine = new BlinkEngine(changes.profile.newValue);
-    if (changes.enabled) enabled = changes.enabled.newValue !== false;
-  });
+  // NOTE: chrome.storage is NOT available in offscreen documents.
+  // The real profile arrives via the ARM message (background reads storage
+  // and includes it) and via PROFILE_UPDATED (sent by the interview on save).
+  // Until then the engine runs defaults — but gestures only fire when armed,
+  // and arming always carries the profile.
 }
 
 async function startCamera() {

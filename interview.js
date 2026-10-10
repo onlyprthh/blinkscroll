@@ -136,6 +136,10 @@ async function save(useDefaults = false) {
   // Previous profile is kept as a fallback; the old one stays live if the
   // user closes this tab without saving (nothing is written until now).
   await chrome.storage.local.set({ profile, prevProfile: prev });
+  // The offscreen worker can't read chrome.storage — push the new profile
+  // to it directly (no-op if it isn't running).
+  try { await chrome.runtime.sendMessage({ type: 'PROFILE_UPDATED', profile }); }
+  catch { /* offscreen doc not running yet */ }
   done = true;
   document.querySelector('.card').innerHTML = `
     <div class="done-icon">👁️✓</div>

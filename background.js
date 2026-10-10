@@ -38,7 +38,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           armedTabs.add(sender.tab.id);
           lastArmedTabId = sender.tab.id;
           await ensureOffscreen();
-          chrome.runtime.sendMessage({ type: 'ARM', tabId: sender.tab.id });
+          // The offscreen document can't read chrome.storage — hand it the
+          // saved profile + enabled flag directly with the ARM.
+          const data = await chrome.storage.local.get(['profile', 'enabled']);
+          chrome.runtime.sendMessage({
+            type: 'ARM',
+            tabId: sender.tab.id,
+            profile: data.profile || null,
+            enabled: data.enabled !== false,
+          });
         }
         break;
       }
