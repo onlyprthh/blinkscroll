@@ -2,7 +2,7 @@
 
 **Scroll reels & shorts with your blinks.** For lazy people — and for everyone who can't (or doesn't want to) use their hands.
 
-BlinkScroll is a Chrome/Edge/Brave extension that watches your blinks through your webcam and turns them into reel controls on **Instagram Reels**, **TikTok**, and **YouTube Shorts**. Lie down, put the phone… er, laptop down, and blink.
+BlinkScroll is a Chrome/Edge/Brave extension that watches your blinks through your webcam and turns them into reel controls on **Instagram Reels**, **Facebook Reels**, **TikTok**, and **YouTube Shorts**. Lie down, put the phone… er, laptop down, and blink.
 
 ## The gesture map (v1)
 
@@ -30,7 +30,7 @@ Detects your default browser (Brave / Chrome / Edge / Chromium — falls back to
 5. The calibration interview opens automatically — give it 60 seconds
    (or watch `setup/interview-walkthrough.mp4` first to see how it works).
 
-Then open Instagram Reels, TikTok, or YouTube Shorts. Blink.
+Then open Instagram Reels, Facebook Reels, TikTok, or YouTube Shorts. Blink.
 
 No build step, no server, no account.
 
@@ -84,7 +84,7 @@ The gesture logic in `src/engine.js` is DOM-free and tested with synthetic eye-a
 
 v0.2.4 — popup-independent camera lifecycle. Camera eligibility now depends on the Enabled setting and selected supported tab URL, never on extension popup focus. Dismissing the toolbar popup no longer tears down the camera.
 
-v0.2.3 — active-tab/camera lifecycle hardening. The selected tab URL is now the source of truth for camera eligibility; failed or lost offscreen starts are reconciled from live status; stale asynchronous camera requests are invalidated when tabs change; and the popup exposes the active URL, camera errors, and a retry action. Automated routing, gesture-engine, installer, and project checks pass. A real webcam and live Instagram/TikTok/YouTube layout verification is still needed before calling every site fully verified.
+v0.2.3 — active-tab/camera lifecycle hardening. The selected tab URL is now the source of truth for camera eligibility; failed or lost offscreen starts are reconciled from live status; stale asynchronous camera requests are invalidated when tabs change; and the popup exposes the active URL, camera errors, and a retry action. Automated routing, gesture-engine, installer, and project checks pass. A real webcam and live Instagram/Facebook/TikTok/YouTube layout verification is still needed before calling every site fully verified.
 
 ## Roadmap ideas
 

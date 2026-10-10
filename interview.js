@@ -94,8 +94,8 @@ function enterStep() {
   } else if (id === 'double') {
     $('title').textContent = 'Your "previous reel" double-blink';
     $('lede').textContent = 'Two quick blinks, one right after the other.';
-    $('instr').innerHTML = '<b>Double-blink 3 times.</b> Don\'t rush it — do it the way that feels natural to you.';
-    $('status').innerHTML = `pairs detected <b>0 / 3</b>`;
+    $('instr').innerHTML = '<b>Double-blink 5 times.</b> Don\'t rush it — do it the way that feels natural to you. Keep the rhythm steady: the same gap every time is what makes it reliable.';
+    $('status').innerHTML = `pairs detected <b>0 / 5</b>`;
     setBtns(btnBack() + btnRedo());
     wireCommon();
   } else if (id === 'long') {
@@ -170,7 +170,7 @@ async function save(useDefaults = false) {
       <p class="lede" style="text-align:center">
         ${useDefaults ? 'Using defaults — you can calibrate properly anytime from the popup.'
                       : 'BlinkScroll learned your eyes.'}<br><br>
-        Open <b>Instagram Reels</b>, <b>TikTok</b>, or <b>YouTube Shorts</b> and blink.<br>
+        Open <b>Instagram Reels</b>, <b>Facebook Reels</b>, <b>TikTok</b>, or <b>YouTube Shorts</b> and blink.<br>
         <span style="color:#6b6b76">single blink → next · double blink → previous · long close → pause</span>
       </p>
       <div class="btns"><button class="primary" id="doneClose">Close this tab</button></div>`;
@@ -307,11 +307,12 @@ function handleEar(ear, now) {
     } else if (id === 'double') {
       if (d >= 120 && d <= 800) {
         if (pendingFirstReopen && b.atMs - pendingFirstReopen < 900) {
-          M.gaps.push(b.atMs - pendingFirstReopen);
+          const gap = Math.round(b.atMs - pendingFirstReopen);
+          M.gaps.push(gap);
           pendingFirstReopen = 0; count++;
-          $('status').innerHTML = `pairs detected <b>${count} / 3</b> <span class="good">✓</span>`;
-          $('bar').style.width = (count / 3) * 100 + '%';
-          if (count >= 3) { stepIndex++; enterStep(); return; }
+          $('status').innerHTML = `pairs detected <b>${count} / 5</b> <span class="good">✓ ${gap}ms apart</span>`;
+          $('bar').style.width = (count / 5) * 100 + '%';
+          if (count >= 5) { stepIndex++; enterStep(); return; }
         } else {
           pendingFirstReopen = b.atMs;
           $('status').innerHTML = `first blink seen — <b>now the second, quick!</b>`;
@@ -332,7 +333,7 @@ function handleEar(ear, now) {
   // expire stale first-blink while waiting for the double's second half
   if (pendingFirstReopen && now - pendingFirstReopen > 1500) {
     pendingFirstReopen = 0;
-    $('status').innerHTML = `pairs detected <b>${count} / 3</b> — too slow, try the two blinks closer together`;
+    $('status').innerHTML = `pairs detected <b>${count} / 5</b> — too slow, try the two blinks closer together`;
   }
 
   // live hold progress for the long-close step

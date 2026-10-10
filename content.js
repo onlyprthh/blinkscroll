@@ -160,4 +160,88 @@ function togglePause() {
   }
 }
 
+// --- On-page status HUD ------------------------------------------------------
+// A small floating pill (shadow DOM: immune to site CSS) showing the live
+// running status: camera, face tracking, last gesture. Visible only while on
+// a supported feed with BlinkScroll enabled. Click "–" to collapse to a dot.
+let hudHost = null;
+
+function ensureHud() {
+  if (hudHost || !document.documentElement) return;
+  hudHost = document.createElement('div');
+  hudHost.id = 'blinkscroll-hud-host';
+  const shadow = hudHost.attachShadow({ mode: 'closed' });
+  shadow.innerHTML = `
+    <style>
+      #hud { position: fixed; right: 12px; bottom: 12px; z-index: 2147483647;
+             font-family: system-ui, -apple-system, sans-serif; font-size: 12px;
+             line-height: 1.5; color: #f5f5f7; background: rgba(14,14,16,0.92);
+             border: 1px solid #2d2d36; border-radius: 10px; padding: 8px 10px;
+             min-width: 148px; box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+             user-select: none; }
+      .row { display: flex; align-items: center; gap: 6px; margin: 2px 0; white-space: nowrap; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; flex: none; }
+      .dot.on { background: #11b086; box-shadow: 0 0 5px #11b086; }
+      .dot.warn { background: #e0a63c; }
+      .title { font-weight: 600; margin-bottom: 4px; display: flex;
+               justify-content: space-between; align-items: center; }
+      #hudToggle { cursor: pointer; border: none; background: none; color: #a8a8b5;
+                   font-size: 14px; padding: 0 4px; line-height: 1; }
+      #hudToggle:hover { color: #f5f5f7; }
+      #hudMini { display: none; align-items: center; gap: 6px; cursor: pointer; padding: 2px; }
+      #hud.collapsed #hudFull { display: none; }
+      #hud.collapsed #hudMini { display: flex; }
+      .dim { opacity: 0.65; }
+    </style>
+    <div id="hud">
+      <div id="hudMini"><span class="dot" id="hudMiniDot"></span><span>👁 BlinkScroll</span></div>
+      <div id="hudFull">
+        <div class="title"><span>👁 BlinkScroll</span><button id="hudToggle" title="Minimize">–</button></div>
+        <div class="row"><span class="dot" id="hudCamDot"></span><span id="hudCamText">Camera…</span></div>
+        <div class="row"><span class="dot" id="hudFaceDot"></span><span id="hudFaceText">Face…</span></div>
+        <div class="row"><span class="dim">Last:</span><span id="hudGestText">–</span></div>
+      </div>
+    </div>`;
+  document.documentElement.appendChild(hudHost);
+  const hud = shadow.getElementById('hud');
+  shadow.getElementById('hudToggle').addEventListener('click', () => hud.classList.add('collapsed'));
+  shadow.getElementById('hudMini').addEventListener('click', () => hud.classList.remove('collapsed'));
+  hudHost._shadow = shadow;
+}
+
+function renderHud(status) {
+  if (!hudHost) return;
+  const s = hudHost._shadow;
+  const setRow = (dotId, textId, text, cls) => {
+    s.getElementById(dotId).className = 'dot' + (cls ? ' ' + cls : '');
+    s.getElementById(textId).textContent = text;
+  };
+  const ok = status && status.ok === true;
+  const camOn = ok && status.cameraOn === true;
+  const camErr = ok && status.cameraError;
+  setRow('hudCamDot', 'hudCamText',
+    camOn ? 'Camera on' : camErr ? 'Camera blocked' : 'Camera off',
+    camOn ? 'on' : camErr ? 'warn' : '');
+  const faceOk = camOn && status.engine && !status.engine.suspended;
+  setRow('hudFaceDot', 'hudFaceText',
+    !camOn ? 'Face –' : faceOk ? 'Face tracking' : 'No face',
+    camOn ? (faceOk ? 'on' : 'warn') : '');
+  s.getElementById('hudGestText').textContent =
+    ok && status.lastGesture ? `${status.lastGesture.type} · ${Math.max(0, Math.round((Date.now() - status.lastGesture.at) / 1000))}s ago` : '–';
+  s.getElementById('hudMiniDot').className = 'dot' + (camOn ? ' on' : camErr ? ' warn' : '');
+}
+
+setInterval(async () => {
+  const show = feedActive && extensionEnabled;
+  if (show) ensureHud();
+  if (hudHost) hudHost.style.display = show ? '' : 'none';
+  if (!show) return;
+  try {
+    // Answered by the offscreen document (the service worker ignores it).
+    renderHud(await chrome.runtime.sendMessage({ type: 'GET_STATUS' }));
+  } catch {
+    renderHud(null);
+  }
+}, 2000);
+
 } // __blinkscroll_injected

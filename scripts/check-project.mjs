@@ -58,6 +58,7 @@ for (const pattern of [
   '*://instagram.com/*', '*://www.instagram.com/*',
   '*://tiktok.com/*', '*://www.tiktok.com/*',
   '*://youtube.com/*', '*://www.youtube.com/*',
+  '*://facebook.com/*', '*://www.facebook.com/*', '*://m.facebook.com/*',
 ]) {
   if (!contentScript?.matches?.includes(pattern)) errors.push(`content_scripts missing host pattern: ${pattern}`);
   if (!manifest.host_permissions?.includes(pattern)) errors.push(`host_permissions missing pattern: ${pattern}`);

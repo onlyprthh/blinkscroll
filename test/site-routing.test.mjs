@@ -34,11 +34,25 @@ test('unrelated hosts and malformed URLs are never treated as supported feeds', 
   assert.equal(routing.isFeedUrl(undefined), false);
 });
 
+test('Facebook Reels are recognized on all host variants', () => {
+  assert.equal(routing.siteForUrl('https://www.facebook.com/reels/'), 'facebook');
+  assert.equal(routing.isFeedUrl('https://www.facebook.com/reels/'), true);
+  assert.equal(routing.isFeedUrl('https://facebook.com/reel/123456/'), true);
+  assert.equal(routing.isFeedUrl('https://m.facebook.com/reels/'), true);
+});
+
+test('Facebook non-reel pages do not arm the camera', () => {
+  assert.equal(routing.isFeedUrl('https://www.facebook.com/'), false);
+  assert.equal(routing.isFeedUrl('https://www.facebook.com/watch/'), false);
+  assert.equal(routing.isFeedUrl('https://www.facebook.com/photo.php?fbid=1'), false);
+});
+
 test('URL patterns include apex and www hosts for each supported platform', () => {
   for (const pattern of [
     '*://instagram.com/*', '*://www.instagram.com/*',
     '*://tiktok.com/*', '*://www.tiktok.com/*',
     '*://youtube.com/*', '*://www.youtube.com/*',
+    '*://facebook.com/*', '*://www.facebook.com/*', '*://m.facebook.com/*',
   ]) assert.ok(routing.urlPatterns.includes(pattern), `missing pattern ${pattern}`);
 });
 

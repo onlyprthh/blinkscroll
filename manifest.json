@@ -18,7 +18,10 @@
         "*://tiktok.com/*",
         "*://www.tiktok.com/*",
         "*://youtube.com/*",
-        "*://www.youtube.com/*"
+        "*://www.youtube.com/*",
+        "*://facebook.com/*",
+        "*://www.facebook.com/*",
+        "*://m.facebook.com/*"
       ],
       "run_at": "document_idle"
     }
@@ -30,7 +33,10 @@
     "*://tiktok.com/*",
     "*://www.tiktok.com/*",
     "*://youtube.com/*",
-    "*://www.youtube.com/*"
+    "*://www.youtube.com/*",
+    "*://facebook.com/*",
+    "*://www.facebook.com/*",
+    "*://m.facebook.com/*"
   ],
   "icons": {
     "128": "icons/icon128.png",
@@ -46,7 +52,7 @@
     "tabs",
     "scripting"
   ],
-  "version": "0.2.7",
+  "version": "0.2.8",
   "sandbox": {
     "pages": [
       "sandbox/detect.html"

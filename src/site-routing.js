@@ -15,6 +15,9 @@
     '*://www.tiktok.com/*',
     '*://youtube.com/*',
     '*://www.youtube.com/*',
+    '*://facebook.com/*',
+    '*://www.facebook.com/*',
+    '*://m.facebook.com/*',
   ]);
 
   function parseUrl(rawUrl) {
@@ -33,6 +36,7 @@
     if (host === 'instagram.com' || host === 'www.instagram.com') return 'instagram';
     if (host === 'tiktok.com' || host === 'www.tiktok.com') return 'tiktok';
     if (host === 'youtube.com' || host === 'www.youtube.com') return 'youtube';
+    if (host === 'facebook.com' || host === 'www.facebook.com' || host === 'm.facebook.com') return 'facebook';
     return null;
   }
 
@@ -47,6 +51,7 @@
     const path = url.pathname;
 
     if (site === 'instagram') return /^\/reels?(?:\/|$)/.test(path);
+    if (site === 'facebook') return /^\/reels?(?:\/|$)/.test(path);
     if (site === 'tiktok') {
       return path === '/' || path.startsWith('/foryou') || /^\/@[^/]+\/video\//.test(path);
     }
