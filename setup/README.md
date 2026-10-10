@@ -33,7 +33,7 @@ malware behavior. The true permanent route is the Chrome Web Store.)
 
 Watch **`manual-setup-guide.mp4`** (narrated, ~1 minute):
 unzip → `chrome://extensions` → Developer mode → Load unpacked →
-select the `extension/` folder → run the interview.
+select the unzipped folder itself → run the interview.
 
 ## 3. Interview walkthrough — video guide
 

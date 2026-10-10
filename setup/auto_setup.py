@@ -30,8 +30,8 @@ import shutil
 import subprocess
 import sys
 
-# (script lives in setup/ — the extension is the sibling ../extension dir)
-EXT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "extension"))
+# (script lives in setup/ — the extension root is the parent dir)
+EXT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 BROWSERS = {
     "brave": {
@@ -343,7 +343,7 @@ def main() -> int:
     if not os.path.isdir(EXT_DIR) or not os.path.exists(
             os.path.join(EXT_DIR, "manifest.json")):
         print(f"ERROR: extension folder not found at {EXT_DIR}")
-        print("Keep auto_setup.py inside setup/ next to the extension/ folder.")
+        print("Keep auto_setup.py inside setup/ at the extension root.")
         return 1
 
     key = default_browser_key()
