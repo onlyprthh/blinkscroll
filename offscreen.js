@@ -18,6 +18,7 @@ let activeTabId = null;
 let enabled = true;
 let lastGesture = null;
 let cameraError = null;
+let cameraPermissionState = 'unknown';
 
 function init() {
   video = document.getElementById('cam');
@@ -82,6 +83,7 @@ function init() {
         cameraOn: !!stream && stream.getTracks().some(track => track.readyState === 'live'),
         cameraStarting: !!cameraStartPromise,
         cameraError,
+        cameraPermission: cameraPermissionState,
         activeTabId,
         armedCount: activeTabId === null ? 0 : 1,
         enabled,
@@ -145,6 +147,26 @@ async function startCameraForGeneration(generation) {
   if (detectorFailed || !detector) {
     const error = new Error(detectorFailed || 'Face detector is unavailable');
     error.name = 'DetectorError';
+    throw error;
+  }
+
+  // Never fire an invisible permission prompt from this hidden document: on
+  // some browsers it auto-dismisses into a deny, permanently wedging the
+  // camera as NotAllowedError. If the permission isn't already granted, fail
+  // fast so the popup routes the user to the visible interview tab
+  // ("Fix camera access"), where the grant actually sticks for the extension.
+  try {
+    cameraPermissionState = (await navigator.permissions.query({ name: 'camera' })).state;
+  } catch {
+    cameraPermissionState = 'unknown';
+  }
+  if (cameraPermissionState === 'denied' || cameraPermissionState === 'prompt') {
+    const error = new Error(
+      cameraPermissionState === 'denied'
+        ? 'Camera permission is blocked for BlinkScroll in the browser settings'
+        : 'Camera permission not granted yet — grant it via "Fix camera access"'
+    );
+    error.name = 'NotAllowedError';
     throw error;
   }
 
