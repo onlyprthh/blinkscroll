@@ -1,3 +1,8 @@
+// Guard: background may inject this into already-open tabs that the
+// manifest already injected into — never run twice in one page.
+if (!window.__blinkscroll_injected) {
+window.__blinkscroll_injected = true;
+
 // content.js — runs on instagram/tiktok/youtube. Detects reels/shorts feeds and
 // executes scroll/pause commands from blink gestures. No camera access here.
 
@@ -93,3 +98,5 @@ function togglePause() {
   vids.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);
   vids[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 }
+
+} // __blinkscroll_injected

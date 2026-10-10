@@ -17,6 +17,7 @@ let engine = new BlinkEngine();
 let armedTabs = new Set();
 let enabled = true;
 let lastGesture = null; // {type, at} — surfaced in the popup for diagnostics
+let cameraError = null;  // e.g. NotReadableError when another tab holds the camera
 
 function init() {
   video = document.getElementById('cam');
@@ -31,7 +32,15 @@ function init() {
       // chrome.storage from an offscreen document).
       if (msg.profile) engine = new BlinkEngine(msg.profile);
       if (typeof msg.enabled === 'boolean') enabled = msg.enabled;
-      startCamera().catch((err) => console.warn('[blinkscroll] camera failed:', err));
+      startCamera().then(
+        () => { cameraError = null; },
+        (err) => {
+          // Most common: the interview tab is still open and holding the
+          // camera (hardware is exclusive). Tell the popup plainly.
+          cameraError = (err && err.name) || 'error';
+          console.warn('[blinkscroll] camera failed:', err);
+        }
+      );
     } else if (msg.type === 'PROFILE_UPDATED') {
       if (msg.profile) engine = new BlinkEngine(msg.profile);
     } else if (msg.type === 'DISARM') {
@@ -50,6 +59,7 @@ function init() {
         modelReady: detectorReady && !detectorFailed,
         detectorError: detectorFailed,
         cameraOn: !!stream,
+        cameraError,
         armedCount: armedTabs.size,
         enabled,
         lastGesture,

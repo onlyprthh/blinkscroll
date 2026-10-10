@@ -6,11 +6,29 @@ const armedTabs = new Set(); // tabIds currently on a reels/shorts feed
 let lastArmedTabId = 0;
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
+  if (reason === 'install' || reason === 'update') injectIntoOpenFeeds();
   if (reason === 'install') {
     // First run: open the calibration interview. Nothing works well without it.
     chrome.tabs.create({ url: chrome.runtime.getURL('interview.html') });
   }
 });
+
+// Chrome does NOT inject content scripts into tabs that were already open
+// when the extension loads — without this, a pre-open reels tab would never
+// be detected until the user manually reloads it.
+async function injectIntoOpenFeeds() {
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ['*://www.instagram.com/*', '*://www.tiktok.com/*', '*://www.youtube.com/*'],
+    });
+    for (const t of tabs) {
+      if (t.id) {
+        chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['content.js'] })
+          .catch(() => {}); // tab may not allow scripting (chrome:// etc.)
+      }
+    }
+  } catch { /* scripting permission missing — non-fatal */ }
+}
 
 async function ensureOffscreen() {
   try {

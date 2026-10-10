@@ -12,8 +12,14 @@ async function refresh() {
   // Ask the offscreen worker for live camera/face status (may not exist yet).
   try {
     const s = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
-    $('camDot').className = 'dot' + (s.cameraOn ? ' on' : '');
-    $('camState').textContent = s.cameraOn ? 'on' : 'off';
+    const camErrText = {
+      NotReadableError: 'busy — close other camera tabs',
+      NotAllowedError: 'blocked — allow camera for this site',
+      NotFoundError: 'no camera found',
+    }[s.cameraError] || (s.cameraError ? 'error' : '');
+    $('camDot').className = 'dot' + (s.cameraOn ? ' on' : (s.cameraError ? ' warn' : ''));
+    $('camState').textContent = s.cameraOn ? 'on' : (camErrText || 'off');
+    $('camState').title = s.cameraError ? `Camera error: ${s.cameraError}` : '';
     const faceOk = s.cameraOn && !s.engine.suspended;
     $('faceDot').className = 'dot' + (s.cameraOn ? (faceOk ? ' on' : ' warn') : '');
     $('faceState').textContent = !s.cameraOn ? '–' : faceOk ? 'tracking' : 'low confidence';

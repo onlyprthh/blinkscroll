@@ -35,7 +35,8 @@
   "permissions": [
     "storage",
     "offscreen",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
   "version": "0.1.0",
   "sandbox": {
