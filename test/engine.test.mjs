@@ -89,11 +89,27 @@ test('long close fires once and clears suppression on reopen during cooldown', (
   assert.deepEqual(engine.update(OPEN, 3400), [{ type: 'single', atMs: 3400 }]);
 });
 
-test('low confidence cancels a pending single instead of firing it later', () => {
+test('brief face loss preserves an in-progress blink', () => {
+  const engine = new BlinkEngine();
+  engine.update(OPEN, 0);
+  engine.update(CLOSED, 40); // eyes close
+  engine.update(CLOSED, 80, 0); // tracking drops mid-blink (grace)
+  engine.update(CLOSED, 120, 0);
+  engine.update(CLOSED, 160, 0);
+  assert.equal(engine.suspended, false);
+  engine.update(OPEN, 300); // face back, eyes open: blink duration 260ms
+  assert.equal(engine.pendingSingleAt, 300);
+  assert.deepEqual(engine.update(OPEN, 750), [{ type: 'single', atMs: 750 }]);
+});
+
+test('sustained face loss cancels a pending single instead of firing it later', () => {
   const engine = new BlinkEngine();
   assert.deepEqual(blink(engine, 10, 260), []);
-  assert.deepEqual(engine.update(OPEN, 800, 0), []);
+  for (let t = 300; t < 300 + 6 * 40; t += 40) {
+    assert.deepEqual(engine.update(OPEN, t, 0), []);
+  }
   assert.equal(engine.pendingSingleAt, 0);
+  assert.equal(engine.suspended, true);
   assert.deepEqual(engine.update(OPEN, 1200, 1), []);
 });
 

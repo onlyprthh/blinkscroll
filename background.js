@@ -30,6 +30,7 @@ const NO_RETRY_CAMERA_ERRORS = new Set([
 ]);
 const CAMERA_RETRY_COOLDOWN_MS = 15000;
 let lastCameraRetryAt = 0;
+let cameraProvenWorking = false; // set once the offscreen reports a live camera
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -210,6 +211,7 @@ async function syncActiveFeed(force = false) {
     // offscreen document cannot leave the cached state permanently stuck ON.
     const status = await readOffscreenStatus();
     if (status?.activeTabId === targetId && (status.cameraOn || status.cameraStarting)) {
+      if (status.cameraOn) cameraProvenWorking = true;
       return targetId;
     }
     // Don't repeatedly prompt for a denied/missing/misconfigured camera. The
@@ -218,8 +220,14 @@ async function syncActiveFeed(force = false) {
     // single momentary failure (e.g. the device was briefly busy) wedged the
     // camera off forever — every later sync early-returned on the cached
     // cameraError and never tried again.
+    // Exception: a permission error on a camera that has already streamed
+    // successfully is treated as transient (browser quirk), not a real deny —
+    // only a camera that has NEVER streamed stays wedged awaiting manual grant.
     if (status?.activeTabId === targetId && status.cameraError) {
-      if (NO_RETRY_CAMERA_ERRORS.has(status.cameraError)) return targetId;
+      const err = status.cameraError;
+      const proven = status.everStreamed === true || cameraProvenWorking;
+      if (err === 'NotAllowedError' && !proven) return targetId;
+      if (err !== 'NotAllowedError' && NO_RETRY_CAMERA_ERRORS.has(err)) return targetId;
       const now = Date.now();
       if (now - lastCameraRetryAt < CAMERA_RETRY_COOLDOWN_MS) return targetId;
       lastCameraRetryAt = now;

@@ -150,6 +150,7 @@ export class BlinkEngine {
     this.pendingSingleAt = 0;
     this.cooldownUntil = 0;
     this.longFired = false;
+    this.lowConfidenceFrames = 0;
     this.baselineMs = this.p.naturalMs;
     this.singleMinMs = this.p.singleMinMs;
     this.openEarSamples = [];
@@ -168,7 +169,12 @@ export class BlinkEngine {
 
     // Gate first: an expired pending single must never fire on a lost face,
     // inactive tab, or disabled extension. Discard rather than replay it later.
+    // A hard blink or quick head turn can momentarily lose landmarks — hold the
+    // sampler state for a few frames instead of discarding an in-progress
+    // blink; only suspend after sustained loss.
     if (safeConfidence < this.p.minConfidence) {
+      this.lowConfidenceFrames++;
+      if (this.lowConfidenceFrames < 6) return [];
       if (!this.suspended) {
         this.suspended = true;
         this.pendingSingleAt = 0;
@@ -178,6 +184,7 @@ export class BlinkEngine {
       }
       return [];
     }
+    this.lowConfidenceFrames = 0;
     this.suspended = false;
 
     const events = [];

@@ -34,6 +34,7 @@ let enabled = true;
 let lastGesture = null;
 let cameraError = null;
 let cameraPermissionState = 'unknown';
+let everStreamed = false; // the camera has delivered live frames at least once
 
 function init() {
   video = document.getElementById('cam');
@@ -99,6 +100,7 @@ function init() {
         cameraStarting: !!cameraStartPromise,
         cameraError,
         cameraPermission: cameraPermissionState,
+        everStreamed,
         activeTabId,
         armedCount: activeTabId === null ? 0 : 1,
         enabled,
@@ -209,6 +211,7 @@ async function startCameraForGeneration(generation) {
       return;
     }
     cameraError = null;
+    everStreamed = true;
     lastVideoTime = -1;
     startPump();
   } catch (err) {
