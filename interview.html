@@ -53,6 +53,10 @@
     <video id="cam" autoplay muted playsinline></video>
     <div class="face-ring" id="ring"></div>
   </div>
+  <!-- Sandboxed WASM detector (MV3 forbids WebAssembly in extension pages).
+       Hidden; it only needs frames via postMessage. -->
+  <iframe id="detector" src="sandbox/detect.html" sandbox="allow-scripts"
+          style="width:2px;height:2px;position:absolute;opacity:0;pointer-events:none"></iframe>
   <div class="instr" id="instr"></div>
   <div class="status" id="status"></div>
   <div class="bar"><i id="bar"></i></div>

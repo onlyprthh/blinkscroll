@@ -38,7 +38,9 @@
     "tabs"
   ],
   "version": "0.1.0",
-  "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-eval'; object-src 'self';"
+  "sandbox": {
+    "pages": [
+      "sandbox/detect.html"
+    ]
   }
 }

@@ -3,8 +3,12 @@
 <head><meta charset="utf-8"><title>BlinkScroll camera worker</title></head>
 <body>
   <!-- The offscreen document owns the webcam. It is never visible;
-       Chrome shows the OS camera indicator while it runs. -->
+       Chrome shows the OS camera indicator while it runs.
+       The sandboxed iframe below is the only place WebAssembly may run
+       (MV3 forbids it in extension pages); frames go over via postMessage. -->
   <video id="cam" autoplay muted playsinline width="640" height="480"></video>
+  <iframe id="detector" src="sandbox/detect.html" sandbox="allow-scripts"
+          style="width:2px;height:2px;position:absolute;opacity:0;pointer-events:none"></iframe>
   <script type="module" src="offscreen.js"></script>
 </body>
 </html>

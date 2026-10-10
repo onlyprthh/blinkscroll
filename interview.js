@@ -1,18 +1,19 @@
 // interview.js — first-run calibration interview.
 // Measures the user's OWN blink timings per gesture, with Back/Redo on every
-// step and nothing saved until the final Save. Runs its own camera + MediaPipe
-// right here in the tab (simpler than routing through the offscreen worker).
-import { FaceLandmarker, FilesetResolver } from './vendor/vision_bundle.mjs';
+// step and nothing saved until the final Save. The camera lives in this tab;
+// face detection WASM runs in the sandboxed iframe (the only place MV3
+// allows it) — frames go over via postMessage, EAR comes back.
 import {
-  BlinkSampler, earFromLandmarks, median, profileFromInterview, DEFAULT_PROFILE,
+  BlinkSampler, median, profileFromInterview, DEFAULT_PROFILE,
 } from './src/engine.js';
+import { SandboxDetector } from './src/sandbox-client.js';
 
 const $ = id => document.getElementById(id);
 const video = $('cam'), ring = $('ring');
 
 const M = { earOpen: [], natural: [], single: [], gaps: [], long: [] };
 let sampler = new BlinkSampler(0.2);
-let landmarker = null, lastVideoTime = -1;
+let detector = null, inFlight = false, lastVideoTime = -1;
 let stepIndex = 0, stepStart = 0, hintAt = 0;
 let count = 0;                 // completed samples this step
 let pendingFirstReopen = 0;    // double-blink pairing
@@ -150,18 +151,10 @@ async function save(useDefaults = false) {
 
 // --- detection loop ---------------------------------------------------------
 async function init() {
-  try {
-    const fileset = await FilesetResolver.forVisionTasks(chrome.runtime.getURL('vendor/wasm'));
-    landmarker = await FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: {
-        modelAssetPath: chrome.runtime.getURL('vendor/face_landmarker.task'),
-        delegate: 'CPU',
-      },
-      runningMode: 'VIDEO',
-      numFaces: 1,
-    });
-  } catch (e) {
-    $('instr').innerHTML = `<span class="warn">Couldn't load the face model: ${e.message}</span>`;
+  detector = new SandboxDetector(document.getElementById('detector'));
+  await detector.ready;
+  if (detector.failed) {
+    $('instr').innerHTML = `<span class="warn">Couldn't load the face model: ${detector.failed}</span>`;
     return;
   }
   try {
@@ -183,16 +176,28 @@ async function init() {
 
 function loop() {
   requestAnimationFrame(loop);
-  if (done || !landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  if (done || inFlight || video.readyState < 2 || video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
   const now = performance.now();
-  const res = landmarker.detectForVideo(video, now);
-  const face = res.faceLandmarks && res.faceLandmarks[0];
-  ring.classList.toggle('ok', !!face);
-  if (!face) return;
+  inFlight = true;
+  createImageBitmap(video, {
+    resizeWidth: 480, resizeHeight: 360, resizeQuality: 'pixelated',
+  }).then(
+    (bitmap) => detector.detect(bitmap, now).then(
+      ({ ear, hasFace }) => {
+        inFlight = false;
+        ring.classList.toggle('ok', hasFace);
+        if (ear == null) return;
+        handleEar(ear, now);
+      },
+      () => { inFlight = false; }
+    ),
+    () => { inFlight = false; }
+  );
+}
 
-  const ear = earFromLandmarks(face);
-  if (ear == null) return;
+// Per-frame EAR consumer: the interview's step state machine (unchanged).
+function handleEar(ear, now) {
   const id = STEPS[stepIndex].id;
 
   if (id === 'face') {

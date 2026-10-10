@@ -1,43 +1,32 @@
-// offscreen.js — owns the webcam + MediaPipe FaceLandmarker + BlinkEngine.
-// Everything runs locally. Frames never leave this document, let alone the machine.
-import { FaceLandmarker, FilesetResolver } from './vendor/vision_bundle.mjs';
-import { BlinkEngine, earFromLandmarks } from './src/engine.js';
+// offscreen.js — owns the webcam. Detection WASM lives in the sandboxed
+// iframe (the only place MV3 allows it); this document captures frames,
+// ships them over, and classifies the returned EAR with BlinkEngine.
+// Everything still runs locally; frames never leave the machine.
+import { BlinkEngine } from './src/engine.js';
+import { SandboxDetector } from './src/sandbox-client.js';
 
-let landmarker = null;
+let detector = null;
+let detectorReady = false;
+let detectorFailed = null;
 let stream = null;
 let video = null;
 let rafId = 0;
 let lastVideoTime = -1;
+let inFlight = false; // don't pile up frame round-trips
 let engine = new BlinkEngine();
 let armedTabs = new Set();
 let enabled = true;
-let modelReady = false;
 
-async function init() {
-  const fileset = await FilesetResolver.forVisionTasks(chrome.runtime.getURL('vendor/wasm'));
-  landmarker = await FaceLandmarker.createFromOptions(fileset, {
-    baseOptions: {
-      modelAssetPath: chrome.runtime.getURL('vendor/face_landmarker.task'),
-      delegate: 'CPU',
-    },
-    runningMode: 'VIDEO',
-    numFaces: 1, // the closest face wins; strangers in the background are ignored
-  });
-  modelReady = true;
+function init() {
+  video = document.getElementById('cam');
 
-  const data = await chrome.storage.local.get(['profile', 'enabled']);
-  if (data.profile) engine = new BlinkEngine(data.profile);
-  enabled = data.enabled !== false;
-
-  chrome.storage.onChanged.addListener(changes => {
-    if (changes.profile?.newValue) engine = new BlinkEngine(changes.profile.newValue);
-    if (changes.enabled) enabled = changes.enabled.newValue !== false;
-  });
-
+  // Register the message listener SYNCHRONOUSLY — the detector takes ~10s
+  // to load WASM, and ARM/GET_STATUS messages arriving during that window
+  // must not be lost.
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === 'ARM') {
       armedTabs.add(msg.tabId);
-      startCamera().catch(err => console.warn('[blinkscroll] camera failed:', err));
+      startCamera().catch((err) => console.warn('[blinkscroll] camera failed:', err));
     } else if (msg.type === 'DISARM') {
       armedTabs.delete(msg.tabId);
       if (armedTabs.size === 0) stopCamera(); // camera light off when not on a feed
@@ -45,7 +34,8 @@ async function init() {
       enabled = msg.enabled !== false;
     } else if (msg.type === 'GET_STATUS') {
       sendResponse({
-        modelReady,
+        modelReady: detectorReady && !detectorFailed,
+        detectorError: detectorFailed,
         cameraOn: !!stream,
         armedCount: armedTabs.size,
         enabled,
@@ -55,11 +45,30 @@ async function init() {
     }
   });
 
-  video = document.getElementById('cam');
+  initAsync().catch((err) => console.error('[blinkscroll] offscreen init failed:', err));
+}
+
+async function initAsync() {
+  detector = new SandboxDetector(document.getElementById('detector'));
+  await detector.ready;
+  detectorFailed = detector.failed;
+  detectorReady = true;
+  if (detectorFailed) {
+    console.error('[blinkscroll] detector failed:', detectorFailed);
+  }
+
+  const data = await chrome.storage.local.get(['profile', 'enabled']);
+  if (data.profile) engine = new BlinkEngine(data.profile);
+  enabled = data.enabled !== false;
+
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.profile?.newValue) engine = new BlinkEngine(changes.profile.newValue);
+    if (changes.enabled) enabled = changes.enabled.newValue !== false;
+  });
 }
 
 async function startCamera() {
-  if (stream || !modelReady) return;
+  if (stream) return;
   stream = await navigator.mediaDevices.getUserMedia({
     video: { width: 640, height: 480, facingMode: 'user' },
     audio: false,
@@ -72,7 +81,7 @@ async function startCamera() {
 function stopCamera() {
   cancelAnimationFrame(rafId);
   rafId = 0;
-  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (stream) stream.getTracks().forEach((t) => t.stop());
   stream = null;
   if (video) video.srcObject = null;
   lastVideoTime = -1;
@@ -84,27 +93,26 @@ function loop() {
   lastVideoTime = video.currentTime;
   const now = performance.now();
 
-  let ear = null;
-  let confidence = 0;
-  try {
-    const res = landmarker.detectForVideo(video, now);
-    const face = res.faceLandmarks && res.faceLandmarks[0];
-    if (face) {
-      ear = earFromLandmarks(face);
-      // Sanity gate: garbage geometry (extreme EAR) counts as "can't see",
-      // never as a blink. This is what keeps dark rooms from misfiring.
-      confidence = ear != null && ear > 0.03 && ear < 0.55 ? 1 : 0;
-    }
-  } catch (err) {
-    console.warn('[blinkscroll] detect failed:', err);
-  }
-
-  const active = armedTabs.size > 0 && enabled;
-  for (const e of engine.update(ear, now, active ? confidence : 0)) {
-    chrome.runtime.sendMessage({ type: 'GESTURE', gesture: e.type });
-  }
-  // Note: the popup reads live status via GET_STATUS (request/response),
-  // so there's no fire-and-forget tick here — unanswered ports would leak.
+  if (!detector || detectorFailed || inFlight) return; // still loading, broken, or busy
+  inFlight = true;
+  // Downscale for the detector: blink geometry survives 480x360 easily,
+  // and the round-trip stays cheap.
+  createImageBitmap(video, {
+    resizeWidth: 480, resizeHeight: 360, resizeQuality: 'pixelated',
+  }).then(
+    (bitmap) => detector.detect(bitmap, now).then(
+      ({ ear, hasFace }) => {
+        inFlight = false;
+        const active = armedTabs.size > 0 && enabled;
+        const confidence = hasFace ? 1 : 0;
+        for (const e of engine.update(ear, now, active ? confidence : 0)) {
+          chrome.runtime.sendMessage({ type: 'GESTURE', gesture: e.type });
+        }
+      },
+      () => { inFlight = false; } // detect rejected (model died mid-run)
+    ),
+    () => { inFlight = false; }
+  );
 }
 
-init().catch(err => console.error('[blinkscroll] offscreen init failed:', err));
+init().catch((err) => console.error('[blinkscroll] offscreen init failed:', err));
