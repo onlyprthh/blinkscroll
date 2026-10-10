@@ -29,16 +29,45 @@ report();
 
 chrome.runtime.onMessage.addListener(msg => {
   if (msg.type !== 'DO_GESTURE' || !feedActive) return;
-  if (msg.gesture === 'single') pressArrow('ArrowDown'); // next reel
-  else if (msg.gesture === 'double') pressArrow('ArrowUp'); // previous reel
-  else if (msg.gesture === 'long') togglePause(); // pause / resume
+  if (msg.gesture === 'single') scrollFeed(1);   // next reel
+  else if (msg.gesture === 'double') scrollFeed(-1); // previous reel
+  else if (msg.gesture === 'long') togglePause();    // pause / resume
 });
 
+function findFeedScroller() {
+  // The biggest visible <video> is the current reel; its nearest scrollable
+  // ancestor is the feed's scroll-snap container. Scrolling THAT is far more
+  // reliable than synthetic key events (no focus/keybinding quirks per site).
+  const vids = [...document.querySelectorAll('video')]
+    .filter(v => v.offsetParent !== null && v.readyState > 0);
+  if (!vids.length) return null;
+  vids.sort((a, b) => (b.clientWidth * b.clientHeight) - (a.clientWidth * a.clientHeight));
+  let el = vids[0].parentElement;
+  while (el && el !== document.documentElement) {
+    const oy = getComputedStyle(el).overflowY;
+    if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay')
+        && el.scrollHeight > el.clientHeight + 8) {
+      return el;
+    }
+    el = el.parentElement;
+  }
+  return null;
+}
+
+function scrollFeed(dir) {
+  const scroller = findFeedScroller();
+  if (scroller) {
+    // One viewport = exactly one reel on all three scroll-snap feeds.
+    scroller.scrollBy({ top: dir * scroller.clientHeight, behavior: 'smooth' });
+  } else {
+    pressArrow(dir > 0 ? 'ArrowDown' : 'ArrowUp'); // fallback: site keybindings
+  }
+}
+
 function pressArrow(key) {
-  // All three players (IG Reels, TikTok, YT Shorts) navigate feeds with
-  // ArrowUp/ArrowDown. Key events avoid brittle per-site DOM selectors.
-  // NOTE: synthetic-key navigation is UNVERIFIED live per site — verify on
-  // first real run; fallback would be scrolling the feed container directly.
+  // Fallback when no feed scroll-container is found: the three players'
+  // native ArrowUp/ArrowDown feed navigation. Key events avoid brittle
+  // per-site DOM selectors.
   const keyCode = key === 'ArrowDown' ? 40 : 38;
   for (const type of ['keydown', 'keyup']) {
     document.dispatchEvent(

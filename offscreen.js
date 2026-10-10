@@ -16,6 +16,7 @@ let inFlight = false; // don't pile up frame round-trips
 let engine = new BlinkEngine();
 let armedTabs = new Set();
 let enabled = true;
+let lastGesture = null; // {type, at} — surfaced in the popup for diagnostics
 
 function init() {
   video = document.getElementById('cam');
@@ -32,6 +33,12 @@ function init() {
       if (armedTabs.size === 0) stopCamera(); // camera light off when not on a feed
     } else if (msg.type === 'ENABLED_CHANGED') {
       enabled = msg.enabled !== false;
+      if (!enabled) {
+        stopCamera(); // extension off = camera off, immediately. No exceptions.
+      } else if (armedTabs.size > 0) {
+        // Re-enabled while sitting on a feed: resume watching.
+        startCamera().catch((err) => console.warn('[blinkscroll] camera failed:', err));
+      }
     } else if (msg.type === 'GET_STATUS') {
       sendResponse({
         modelReady: detectorReady && !detectorFailed,
@@ -39,6 +46,7 @@ function init() {
         cameraOn: !!stream,
         armedCount: armedTabs.size,
         enabled,
+        lastGesture,
         engine: engine.status(performance.now()),
       });
       return true;
@@ -106,6 +114,7 @@ function loop() {
         const active = armedTabs.size > 0 && enabled;
         const confidence = hasFace ? 1 : 0;
         for (const e of engine.update(ear, now, active ? confidence : 0)) {
+          lastGesture = { type: e.type, at: Date.now() };
           chrome.runtime.sendMessage({ type: 'GESTURE', gesture: e.type });
         }
       },

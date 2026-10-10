@@ -4,6 +4,7 @@ const $ = id => document.getElementById(id);
 async function refresh() {
   const state = await chrome.runtime.sendMessage({ type: 'GET_STATE' });
   $('enabled').checked = state.enabled;
+  $('feedState').textContent = state.feedActive ? 'detected ✓' : 'not on a feed';
   $('calibLine').textContent = state.hasProfile
     ? 'calibrated ' + new Date(state.calibratedAt).toLocaleDateString()
     : 'not calibrated yet — run the interview';
@@ -16,15 +17,32 @@ async function refresh() {
     const faceOk = s.cameraOn && !s.engine.suspended;
     $('faceDot').className = 'dot' + (s.cameraOn ? (faceOk ? ' on' : ' warn') : '');
     $('faceState').textContent = !s.cameraOn ? '–' : faceOk ? 'tracking' : 'low confidence';
+    if (s.lastGesture) {
+      const ago = Math.max(0, Math.round((Date.now() - s.lastGesture.at) / 1000));
+      $('gestureState').textContent = `${s.lastGesture.type} · ${ago}s ago`;
+    } else {
+      $('gestureState').textContent = 'none yet — blink to test';
+    }
   } catch {
     $('camState').textContent = 'off';
     $('faceState').textContent = '–';
+    $('gestureState').textContent = '–';
   }
 }
 
 $('enabled').addEventListener('change', async e => {
   await chrome.runtime.sendMessage({ type: 'SET_ENABLED', enabled: e.target.checked });
   refresh();
+});
+$('testScroll').addEventListener('click', async () => {
+  // Bypass blink detection entirely: send a "next" straight to this tab's
+  // content script. If the feed scrolls, the scroll path is fine and the
+  // problem is gesture detection — if not, the problem is here.
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id) {
+    chrome.tabs.sendMessage(tab.id, { type: 'DO_GESTURE', gesture: 'single' })
+      .catch(() => { $('gestureState').textContent = 'no content script on this tab'; });
+  }
 });
 $('recal').addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('interview.html') });

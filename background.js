@@ -66,6 +66,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           enabled: data.enabled !== false,
           hasProfile: !!data.profile,
           calibratedAt: data.profile?.calibratedAt || 0,
+          feedActive: armedTabs.size > 0,
         });
         break;
       }
