@@ -109,9 +109,18 @@ function scrollFeed(dir) {
   const host = location.hostname || '';
   if (host.endsWith('tiktok.com')) {
     // TikTok drives its feed through its own key/wheel handlers with animated
-    // transitions; programmatic scroll() on its container is ignored (verified
-    // against the live DOM 2026-10-11). Arrow keys are its documented feed
-    // navigation ("use the ↑ ↓ keys ... to browse your feed"), so use those.
+    // transitions; programmatic scroll() on its container is ignored, and
+    // synthetic key events dispatched on `document` miss its handlers (they
+    // are attached below document; real presses bubble up from the focused
+    // element). Its own prev/next chevron buttons are the reliable actuator:
+    // real clicks verified to advance the feed (2026-10-11), the
+    // data-e2e selectors are build-stable, and React onClick fires for
+    // synthetic clicks too.
+    const chevron = document.querySelector(dir > 0
+      ? 'button[data-e2e="feed-navigation-next"]'
+      : 'button[data-e2e="feed-navigation-prev"]');
+    if (chevron) { chevron.click(); return; }
+    // No chevrons (e.g. single-video pages): fall back to arrow keys.
     pressArrow(dir > 0 ? 'ArrowDown' : 'ArrowUp');
     return;
   }
@@ -129,12 +138,20 @@ function scrollFeed(dir) {
 }
 
 function pressArrow(key) {
-  // Fallback when no feed scroll-container is found: the three players'
-  // native ArrowUp/ArrowDown feed navigation. Key events avoid brittle
-  // per-site DOM selectors.
+  // Fallback when no feed scroll-container is found: the players' native
+  // ArrowUp/ArrowDown feed navigation.
+  //
+  // Dispatch from deep in the DOM (the current video element) so the event
+  // bubbles through every ancestor: app root, body, document, window.
+  // Dispatching on `document` misses listeners attached below it — events
+  // never propagate downward — which is why synthetic keys did nothing on
+  // TikTok while real key presses worked.
   const keyCode = key === 'ArrowDown' ? 40 : 38;
+  const target = document.querySelector('video') ||
+    (document.activeElement instanceof Element ? document.activeElement : null) ||
+    document.body;
   for (const type of ['keydown', 'keyup']) {
-    document.dispatchEvent(
+    target.dispatchEvent(
       new KeyboardEvent(type, {
         key,
         code: key,

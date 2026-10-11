@@ -16,6 +16,14 @@ test('Instagram non-feed pages do not arm the camera', () => {
   assert.equal(routing.isFeedUrl('https://instagram.com/accounts/login/'), false);
 });
 
+test('TikTok Following feed is recognized as a supported feed', () => {
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/following'), true);
+  assert.equal(routing.isFeedUrl('https://tiktok.com/following/'), true);
+  // Grids and non-feed pages stay excluded.
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/@creator'), false);
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/explore'), false);
+});
+
 test('TikTok supported feed routes are recognized on both host variants', () => {
   assert.equal(routing.isFeedUrl('https://www.tiktok.com/'), true);
   assert.equal(routing.isFeedUrl('https://tiktok.com/foryou'), true);
@@ -33,7 +41,7 @@ test('TikTok locale-prefixed feed routes are recognized', () => {
 test('TikTok locale-prefixed non-feed pages do not arm the camera', () => {
   assert.equal(routing.isFeedUrl('https://www.tiktok.com/en/discover'), false);
   assert.equal(routing.isFeedUrl('https://www.tiktok.com/en/upload'), false);
-  assert.equal(routing.isFeedUrl('https://www.tiktok.com/following'), false);
+  assert.equal(routing.isFeedUrl('https://www.tiktok.com/en/following'), true);
 });
 
 test('YouTube Shorts routes are recognized on both host variants', () => {
